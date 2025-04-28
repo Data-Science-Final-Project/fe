@@ -17,6 +17,10 @@ import re
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+
+os.system("pip install fpdf")
+
+
 # Load environment variables
 load_dotenv()
 DATABASE_NAME = os.getenv("DATABASE_NAME")
