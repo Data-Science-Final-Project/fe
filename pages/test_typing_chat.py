@@ -101,9 +101,9 @@ async def find_relevant_documents(
             metric="cosine"
         )
 
-        tasks = []
-        names = []
-        full_prompts = []
+        tasks, names, full_prompts, section_summaries = [], [], [], []
+
+        show_all_segments = st.session_state.get("show_all_segments", False)
 
         for match in results.get("matches", []):
             if match.get("score", 0) < score_threshold:
@@ -116,11 +116,12 @@ async def find_relevant_documents(
 
             name = doc.get(name_field, "לא צויין")
             desc = doc.get(desc_field, "אין תיאור")
-
-            # 🧩 שלב ראשון – רק 3 סעיפים ראשונים
             segments = doc.get("Segments", [])
+
             short_section_text = ""
             full_section_text = ""
+            section_titles = []
+
             for i, seg in enumerate(segments):
                 number = seg.get("SectionNumber", "")
                 title = seg.get("SectionDescription", "").strip()
@@ -130,6 +131,10 @@ async def find_relevant_documents(
                     if i < 3:
                         short_section_text += block
                     full_section_text += block
+                    if i < 3:
+                        section_titles.append(f"סעיף {number}: {title}")
+
+            section_summaries.append("\n".join(section_titles) if section_titles else "אין סעיפים זמינים")
 
             base_prompt = f"""סצנה:\n{text}\n\n{label}:\nשם: {name}\nתיאור כללי: {desc}"""
 
@@ -139,10 +144,10 @@ async def find_relevant_documents(
                 f"\n\nמדוע {label.lower()} זה רלוונטי לסיטואציה? החזר JSON:\n{{\"advice\": \"הסבר\", \"score\": 8}}"
 
             names.append(name)
-            full_prompts.append(full_prompt)  # לשימוש אם צריך fallback
+            full_prompts.append(full_prompt)
             tasks.append(client_openai.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": short_prompt}],
+                messages=[{"role": "user", "content": full_prompt if show_all_segments else short_prompt}],
                 temperature=0.5
             ))
 
@@ -153,25 +158,27 @@ async def find_relevant_documents(
             try:
                 content = r.choices[0].message.content.strip()
                 parsed = json.loads(content)
-                score = parsed.get("score", 0)
+                score = int(parsed.get("score", 0))
+                advice = parsed.get("advice", "לא התקבל הסבר")
 
                 # fallback אם הציון נמוך
-                if score < 6:
+                if score < 6 and not show_all_segments:
                     retry = await client_openai.chat.completions.create(
                         model="gpt-3.5-turbo",
                         messages=[{"role": "user", "content": full_prompts[i]}],
                         temperature=0.5
                     )
-                    content = retry.choices[0].message.content.strip()
-                    parsed = json.loads(content)
-                    score = parsed.get("score", 0)
+                    parsed_retry = json.loads(retry.choices[0].message.content.strip())
+                    advice = parsed_retry.get("advice", advice)
+                    score = int(parsed_retry.get("score", score))
 
-                advice = parsed.get("advice", "לא התקבל הסבר")
-                results.append(
-                    f"#### {label}: {names[i]}\n"
-                    f"**הסבר**: {advice}\n"
-                    f"**ציון רלוונטיות**: {score}/10"
-                )
+                # עיצוב
+                with st.expander(f"{label}: {names[i]} (ציון: {score}/10)"):
+                    st.markdown(f"**הסבר**: {advice}")
+                    st.markdown(f"**סעיפים שנשלחו ל־GPT:**\n{section_summaries[i]}")
+
+                results.append(f"{label}: {names[i]} (ציון: {score}/10)")
+
             except Exception as e:
                 results.append(f"⚠️ שגיאה בפיענוח תגובת GPT: {e}")
 
@@ -179,6 +186,7 @@ async def find_relevant_documents(
 
     except Exception as e:
         return [f"שגיאה באחזור {label.lower()}ים: {e}"]
+
 
 
 async def find_relevant_judgments(text):
@@ -191,15 +199,22 @@ async def generate_response(user_input):
     context = "אתה עוזר משפטי מקצועי בדין הישראלי. ענה בקצרה ובמדויק."
     if "doc_summary" in st.session_state:
         context += f"\nהמסמך מסוכם כך: {st.session_state['doc_summary']}"
+
+    # אפשרות שליטה מהמשתמש אם להפעיל full segments
+    st.session_state["show_all_segments"] = st.checkbox("💡 הצג את כל הסעיפים במסמכים")
+
     judgments, laws = await asyncio.gather(
         find_relevant_judgments(user_input),
         find_relevant_laws(user_input)
     )
+
     context += "\n\n📚 פסקי דין רלוונטיים:\n" + "\n".join(judgments)
     context += "\n\n⚖️ חוקים רלוונטיים:\n" + "\n".join(laws)
+
     messages = [{"role": "system", "content": context}]
     messages += [{"role": m["role"], "content": m["content"]} for m in st.session_state["messages"][-5:]]
     messages.append({"role": "user", "content": user_input})
+
     response = await client_openai.chat.completions.create(
         model="gpt-4",
         messages=messages,
@@ -208,12 +223,15 @@ async def generate_response(user_input):
     )
     return response.choices[0].message.content.strip()
 
+
 def display_messages():
     for msg in st.session_state['messages']:
         role = "user-message" if msg['role'] == "user" else "bot-message"
         st.markdown(
             f"<div class='{role}'>{msg['content']}<div class='timestamp'>{msg['timestamp']}</div></div>",
             unsafe_allow_html=True
+        )
+
         )
 
 # ===== App =====
