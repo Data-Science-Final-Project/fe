@@ -103,6 +103,7 @@ async def find_relevant_documents(
 
         tasks, names, full_prompts, section_summaries = [], [], [], []
 
+        # בודק אם המשתמש רוצה לראות את כל הסעיפים
         show_all_segments = st.session_state.get("show_all_segments", False)
 
         for match in results.get("matches", []):
@@ -231,9 +232,6 @@ def display_messages():
             f"<div class='{role}'>{msg['content']}<div class='timestamp'>{msg['timestamp']}</div></div>",
             unsafe_allow_html=True
         )
-
-        )
-
 # ===== App =====
 st.markdown('<div class="chat-header">💬 Ask Mini Lawyer</div>', unsafe_allow_html=True)
 chat_id = get_or_create_chat_id()
