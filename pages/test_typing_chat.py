@@ -103,6 +103,7 @@ async def find_relevant_documents(
 
         tasks = []
         names = []
+        full_prompts = []
 
         for match in results.get("matches", []):
             if match.get("score", 0) < score_threshold:
@@ -116,33 +117,65 @@ async def find_relevant_documents(
             name = doc.get(name_field, "לא צויין")
             desc = doc.get(desc_field, "אין תיאור")
 
-            # 🧩 עיבוד סעיפים (Segments) – עד 3 סעיפים בלבד לפרומפט
+            # 🧩 שלב ראשון – רק 3 סעיפים ראשונים
             segments = doc.get("Segments", [])
-            section_text = ""
-            for seg in segments[:3]:  # הגבל ל-3 סעיפים ראשונים
+            short_section_text = ""
+            full_section_text = ""
+            for i, seg in enumerate(segments):
                 number = seg.get("SectionNumber", "")
                 title = seg.get("SectionDescription", "").strip()
                 content = seg.get("SectionContent", "").strip()
                 if content:
-                    section_text += f"\n\nסעיף {number}: {title}\n{content}"
+                    block = f"\n\nסעיף {number}: {title}\n{content}"
+                    if i < 3:
+                        short_section_text += block
+                    full_section_text += block
 
-            prompt = f"""סצנה:\n{text}\n\n{label}:\nשם: {name}\nתיאור כללי: {desc}{section_text}\n\nמדוע {label.lower()} זה רלוונטי לסיטואציה? החזר JSON:\n{{"advice": "הסבר", "score": 8}}"""
+            base_prompt = f"""סצנה:\n{text}\n\n{label}:\nשם: {name}\nתיאור כללי: {desc}"""
+
+            short_prompt = base_prompt + short_section_text + \
+                f"\n\nמדוע {label.lower()} זה רלוונטי לסיטואציה? החזר JSON:\n{{\"advice\": \"הסבר\", \"score\": 8}}"
+            full_prompt = base_prompt + full_section_text + \
+                f"\n\nמדוע {label.lower()} זה רלוונטי לסיטואציה? החזר JSON:\n{{\"advice\": \"הסבר\", \"score\": 8}}"
 
             names.append(name)
+            full_prompts.append(full_prompt)  # לשימוש אם צריך fallback
             tasks.append(client_openai.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": short_prompt}],
                 temperature=0.5
             ))
 
         replies = await asyncio.gather(*tasks)
 
-        return [
-            f"#### {label}: {name}\n"
-            f"**הסבר**: {json.loads(r.choices[0].message.content)['advice']}\n"
-            f"**ציון רלוונטיות**: {json.loads(r.choices[0].message.content)['score']}/10"
-            for name, r in zip(names, replies)
-        ]
+        results = []
+        for i, r in enumerate(replies):
+            try:
+                content = r.choices[0].message.content.strip()
+                parsed = json.loads(content)
+                score = parsed.get("score", 0)
+
+                # fallback אם הציון נמוך
+                if score < 6:
+                    retry = await client_openai.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[{"role": "user", "content": full_prompts[i]}],
+                        temperature=0.5
+                    )
+                    content = retry.choices[0].message.content.strip()
+                    parsed = json.loads(content)
+                    score = parsed.get("score", 0)
+
+                advice = parsed.get("advice", "לא התקבל הסבר")
+                results.append(
+                    f"#### {label}: {names[i]}\n"
+                    f"**הסבר**: {advice}\n"
+                    f"**ציון רלוונטיות**: {score}/10"
+                )
+            except Exception as e:
+                results.append(f"⚠️ שגיאה בפיענוח תגובת GPT: {e}")
+
+        return results
 
     except Exception as e:
         return [f"שגיאה באחזור {label.lower()}ים: {e}"]
