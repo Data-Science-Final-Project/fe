@@ -87,33 +87,66 @@ def add_message(role, content):
     })
 
 # ===== Async Document Retrieval Engine =====
-async def find_relevant_documents(text, index, mongo_collection, id_field, name_field, desc_field, label, top_k=3, score_threshold=0.75):
+async def find_relevant_documents(
+    text, index, mongo_collection,
+    id_field, name_field, desc_field, label,
+    top_k=3, score_threshold=0.75
+):
     try:
         embedding = model.encode([text], normalize_embeddings=True)[0]
-        results = index.query(vector=embedding.tolist(), top_k=top_k, include_metadata=True, metric="cosine")
+        results = index.query(
+            vector=embedding.tolist(),
+            top_k=top_k,
+            include_metadata=True,
+            metric="cosine"
+        )
+
         tasks = []
         names = []
+
         for match in results.get("matches", []):
             if match.get("score", 0) < score_threshold:
                 continue
+
             meta = match.get("metadata", {})
             doc = mongo_collection.find_one({id_field: meta.get(id_field)})
             if not doc:
                 continue
+
             name = doc.get(name_field, "לא צויין")
             desc = doc.get(desc_field, "אין תיאור")
-            prompt = f"""סצנה:\n{text}\n\n{label}:\nשם: {name}\nתיאור: {desc}\n\nמדוע {label.lower()} זה רלוונטי לסיטואציה? החזר JSON:\n{{\"advice\": \"הסבר\", \"score\": 8}}"""
+
+            # 🧩 עיבוד סעיפים (Segments) – עד 3 סעיפים בלבד לפרומפט
+            segments = doc.get("Segments", [])
+            section_text = ""
+            for seg in segments[:3]:  # הגבל ל-3 סעיפים ראשונים
+                number = seg.get("SectionNumber", "")
+                title = seg.get("SectionDescription", "").strip()
+                content = seg.get("SectionContent", "").strip()
+                if content:
+                    section_text += f"\n\nסעיף {number}: {title}\n{content}"
+
+            prompt = f"""סצנה:\n{text}\n\n{label}:\nשם: {name}\nתיאור כללי: {desc}{section_text}\n\nמדוע {label.lower()} זה רלוונטי לסיטואציה? החזר JSON:\n{{"advice": "הסבר", "score": 8}}"""
+
             names.append(name)
             tasks.append(client_openai.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.5
             ))
+
         replies = await asyncio.gather(*tasks)
-        return [f"#### {label}: {name}\n**הסבר**: {json.loads(r.choices[0].message.content)['advice']}\n**ציון רלוונטיות**: {json.loads(r.choices[0].message.content)['score']}/10"
-                for name, r in zip(names, replies)]
+
+        return [
+            f"#### {label}: {name}\n"
+            f"**הסבר**: {json.loads(r.choices[0].message.content)['advice']}\n"
+            f"**ציון רלוונטיות**: {json.loads(r.choices[0].message.content)['score']}/10"
+            for name, r in zip(names, replies)
+        ]
+
     except Exception as e:
         return [f"שגיאה באחזור {label.lower()}ים: {e}"]
+
 
 async def find_relevant_judgments(text):
     return await find_relevant_documents(text, judgment_index, judgment_collection, "CaseNumber", "Name", "Description", "פסק דין")
