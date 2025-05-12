@@ -1,7 +1,8 @@
+
 import os
 import streamlit as st
 import torch
-from openai import OpenAI
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from datetime import datetime
 from app_resources import mongo_client, pinecone_client, model
@@ -10,13 +11,14 @@ from streamlit_js import st_js, st_js_blocking
 import json
 import fitz
 import docx
+import asyncio
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Load environment variables early
 load_dotenv()
 DATABASE_NAME = os.getenv("DATABASE_NAME")
-client_openai = OpenAI(api_key=os.getenv("OPEN_AI"))
+client_openai = AsyncOpenAI(api_key=os.getenv("OPEN_AI"))
 
 # External sources
 judgment_index = pinecone_client.Index("judgments-names")
@@ -74,7 +76,7 @@ def read_pdf(file):
 def read_docx(file):
     return "\n".join([p.text for p in docx.Document(file).paragraphs])
 
-def show_typing_realtime(msg="🤖 הבוט מקליד..."):
+def show_typing_realtime(msg="🧐 הבוט מקליד..."):
     ph = st.empty()
     ph.markdown(f"<div style='color:gray;'>{msg}</div>", unsafe_allow_html=True)
     return ph
@@ -84,80 +86,62 @@ def add_message(role, content):
         "role": role, "content": content, "timestamp": datetime.now().strftime("%H:%M:%S")
     })
 
-def find_relevant_judgments(text, top_k=3):
+# ===== Async Document Retrieval Engine =====
+async def find_relevant_documents(text, index, mongo_collection, id_field, name_field, desc_field, label, top_k=3, score_threshold=0.75):
     try:
         embedding = model.encode([text], normalize_embeddings=True)[0]
-        results = judgment_index.query(vector=embedding.tolist(), top_k=top_k, include_metadata=True)
-        explanations = []
-        for match in results["matches"]:
+        results = index.query(vector=embedding.tolist(), top_k=top_k, include_metadata=True, metric="cosine")
+        tasks = []
+        names = []
+        for match in results.get("matches", []):
+            if match.get("score", 0) < score_threshold:
+                continue
             meta = match.get("metadata", {})
-            doc = judgment_collection.find_one({"CaseNumber": meta.get("CaseNumber")})
-            if doc:
-                name = doc.get("Name", "")
-                desc = doc.get("Description", "")
-                prompt = f"""סצנה:
-{text}
-
-פסק דין:
-שם: {name}
-תיאור: {desc}
-
-מדוע פסק הדין רלוונטי לסיטואציה? דרג מ-0 עד 10 בפורמט JSON:
-{{"advice": "הסבר", "score": 8}}"""
-                reply = client_openai.chat.completions.create(
-                    model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}], temperature=0.5
-                )
-                parsed = json.loads(reply.choices[0].message.content.strip())
-                explanations.append(f"פסק דין: {name}\nהסבר: {parsed['advice']} (ציון: {parsed['score']}/10)")
-        return explanations
+            doc = mongo_collection.find_one({id_field: meta.get(id_field)})
+            if not doc:
+                continue
+            name = doc.get(name_field, "לא צויין")
+            desc = doc.get(desc_field, "אין תיאור")
+            prompt = f"""סצנה:\n{text}\n\n{label}:\nשם: {name}\nתיאור: {desc}\n\nמדוע {label.lower()} זה רלוונטי לסיטואציה? החזר JSON:\n{{\"advice\": \"הסבר\", \"score\": 8}}"""
+            names.append(name)
+            tasks.append(client_openai.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.5
+            ))
+        replies = await asyncio.gather(*tasks)
+        return [f"#### {label}: {name}\n**הסבר**: {json.loads(r.choices[0].message.content)['advice']}\n**ציון רלוונטיות**: {json.loads(r.choices[0].message.content)['score']}/10"
+                for name, r in zip(names, replies)]
     except Exception as e:
-        return [f"שגיאה באחזור פסקי דין: {e}"]
+        return [f"שגיאה באחזור {label.lower()}ים: {e}"]
 
-def find_relevant_laws(text, top_k=3):
-    try:
-        embedding = model.encode([text], normalize_embeddings=True)[0]
-        results = law_index.query(vector=embedding.tolist(), top_k=top_k, include_metadata=True)
-        explanations = []
-        for match in results["matches"]:
-            meta = match.get("metadata", {})
-            doc = law_collection.find_one({"IsraelLawID": meta.get("IsraelLawID")})
-            if doc:
-                name = doc.get("Name", "")
-                desc = doc.get("Description", "")
-                prompt = f"""סצנה:
-{text}
+async def find_relevant_judgments(text):
+    return await find_relevant_documents(text, judgment_index, judgment_collection, "CaseNumber", "Name", "Description", "פסק דין")
 
-חוק:
-שם: {name}
-תיאור: {desc}
+async def find_relevant_laws(text):
+    return await find_relevant_documents(text, law_index, law_collection, "IsraelLawID", "Name", "Description", "חוק")
 
-מדוע החוק רלוונטי לסיטואציה? החזר בפורמט JSON:
-{{"advice": "הסבר", "score": 8}}"""
-                reply = client_openai.chat.completions.create(
-                    model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}], temperature=0.5
-                )
-                parsed = json.loads(reply.choices[0].message.content.strip())
-                explanations.append(f"חוק: {name}\nהסבר: {parsed['advice']} (ציון: {parsed['score']}/10)")
-        return explanations
-    except Exception as e:
-        return [f"שגיאה באחזור חוקים: {e}"]
-
-def generate_response(user_input):
+async def generate_response(user_input):
     context = "אתה עוזר משפטי מקצועי בדין הישראלי. ענה בקצרה ובמדויק."
     if "doc_summary" in st.session_state:
         context += f"\nהמסמך מסוכם כך: {st.session_state['doc_summary']}"
-    judgments = find_relevant_judgments(user_input)
-    laws = find_relevant_laws(user_input)
+    judgments, laws = await asyncio.gather(
+        find_relevant_judgments(user_input),
+        find_relevant_laws(user_input)
+    )
     context += "\n\n📚 פסקי דין רלוונטיים:\n" + "\n".join(judgments)
     context += "\n\n⚖️ חוקים רלוונטיים:\n" + "\n".join(laws)
     messages = [{"role": "system", "content": context}]
     messages += [{"role": m["role"], "content": m["content"]} for m in st.session_state["messages"][-5:]]
     messages.append({"role": "user", "content": user_input})
-    response = client_openai.chat.completions.create(
-        model="gpt-4", messages=messages, max_tokens=700, temperature=0.7
+    response = await client_openai.chat.completions.create(
+        model="gpt-4",
+        messages=messages,
+        max_tokens=700,
+        temperature=0.7
     )
     return response.choices[0].message.content.strip()
-    
+
 def display_messages():
     for msg in st.session_state['messages']:
         role = "user-message" if msg['role'] == "user" else "bot-message"
@@ -195,13 +179,12 @@ else:
 
     if "uploaded_doc_text" in st.session_state and st.button("📋 סכם את המסמך"):
         with st.spinner("GPT מסכם את המסמך..."):
-            summary_prompt = f"""סכם את המסמך המשפטי הבא בקצרה:
----
-{st.session_state['uploaded_doc_text']}
-"""
-            response = client_openai.chat.completions.create(
-                model="gpt-4", messages=[{"role": "user", "content": summary_prompt}], temperature=0.5
-            )
+            summary_prompt = f"""סכם את המסמך המשפטי הבא בקצרה:\n---\n{st.session_state['uploaded_doc_text']}"""
+            response = asyncio.run(client_openai.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": summary_prompt}],
+                temperature=0.5
+            ))
             st.session_state["doc_summary"] = response.choices[0].message.content.strip()
 
     if "doc_summary" in st.session_state:
@@ -217,7 +200,7 @@ else:
 
     if st.session_state['messages'] and st.session_state['messages'][-1]['role'] == "user":
         typing = show_typing_realtime()
-        response = generate_response(st.session_state['messages'][-1]['content'])
+        response = asyncio.run(generate_response(st.session_state['messages'][-1]['content']))
         typing.empty()
         add_message("assistant", response)
         save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
