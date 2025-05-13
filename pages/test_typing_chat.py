@@ -90,7 +90,7 @@ def add_message(role, content):
 async def find_relevant_documents_fulltext(
     text, index, mongo_collection,
     id_field, name_field, desc_field, label,
-    top_k=3, max_sections=3, score_threshold=0.75
+    top_k=3, max_sections=3, score_threshold=0.6
 ):
     try:
         question_embedding = model.encode([text], normalize_embeddings=True)[0]
