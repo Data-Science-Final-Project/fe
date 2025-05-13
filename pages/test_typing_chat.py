@@ -87,24 +87,21 @@ def add_message(role, content):
     })
 
 # ===== Async Document Retrieval Engine =====
-async def find_relevant_documents(
+async def find_relevant_documents_fulltext(
     text, index, mongo_collection,
     id_field, name_field, desc_field, label,
-    top_k=3, score_threshold=0.75
+    top_k=3, max_sections=3, score_threshold=0.75
 ):
     try:
-        embedding = model.encode([text], normalize_embeddings=True)[0]
+        question_embedding = model.encode([text], normalize_embeddings=True)[0]
         results = index.query(
-            vector=embedding.tolist(),
+            vector=question_embedding.tolist(),
             top_k=top_k,
             include_metadata=True,
             metric="cosine"
         )
 
-        tasks, names, full_prompts, section_summaries = [], [], [], []
-
-        # בודק אם המשתמש רוצה לראות את כל הסעיפים
-        show_all_segments = st.session_state.get("show_all_segments", False)
+        output = []
 
         for match in results.get("matches", []):
             if match.get("score", 0) < score_threshold:
@@ -119,110 +116,113 @@ async def find_relevant_documents(
             desc = doc.get(desc_field, "אין תיאור")
             segments = doc.get("Segments", [])
 
-            short_section_text = ""
-            full_section_text = ""
-            section_titles = []
-
-            for i, seg in enumerate(segments):
+            section_texts = []
+            for seg in segments:
                 number = seg.get("SectionNumber", "")
                 title = seg.get("SectionDescription", "").strip()
                 content = seg.get("SectionContent", "").strip()
                 if content:
-                    block = f"\n\nסעיף {number}: {title}\n{content}"
-                    if i < 3:
-                        short_section_text += block
-                    full_section_text += block
-                    if i < 3:
-                        section_titles.append(f"סעיף {number}: {title}")
+                    section_texts.append(f"סעיף {number}: {title}\n{content}")
 
-            section_summaries.append("\n".join(section_titles) if section_titles else "אין סעיפים זמינים")
+            if section_texts:
+                section_embeddings = model.encode(section_texts, normalize_embeddings=True)
+                similarities = cosine_similarity([question_embedding], section_embeddings)[0]
+                top_indices = np.argsort(similarities)[::-1][:max_sections]
 
-            base_prompt = f"""סצנה:\n{text}\n\n{label}:\nשם: {name}\nתיאור כללי: {desc}"""
+                top_sections = [section_texts[i] for i in top_indices]
+                top_text = f"תיאור כללי: {desc}\n\n" + "\n\n".join(top_sections)
+                output.append((name, top_text))
 
-            short_prompt = base_prompt + short_section_text + \
-                f"\n\nמדוע {label.lower()} זה רלוונטי לסיטואציה? החזר JSON:\n{{\"advice\": \"הסבר\", \"score\": 8}}"
-            full_prompt = base_prompt + full_section_text + \
-                f"\n\nמדוע {label.lower()} זה רלוונטי לסיטואציה? החזר JSON:\n{{\"advice\": \"הסבר\", \"score\": 8}}"
-
-            names.append(name)
-            full_prompts.append(full_prompt)
-            tasks.append(client_openai.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[{"role": "user", "content": full_prompt if show_all_segments else short_prompt}],
-                temperature=0.5
-            ))
-
-        replies = await asyncio.gather(*tasks)
-
-        results = []
-        for i, r in enumerate(replies):
-            try:
-                content = r.choices[0].message.content.strip()
-                parsed = json.loads(content)
-                score = int(parsed.get("score", 0))
-                advice = parsed.get("advice", "לא התקבל הסבר")
-
-                # fallback אם הציון נמוך
-                if score < 6 and not show_all_segments:
-                    retry = await client_openai.chat.completions.create(
-                        model="gpt-3.5-turbo",
-                        messages=[{"role": "user", "content": full_prompts[i]}],
-                        temperature=0.5
-                    )
-                    parsed_retry = json.loads(retry.choices[0].message.content.strip())
-                    advice = parsed_retry.get("advice", advice)
-                    score = int(parsed_retry.get("score", score))
-
-                # עיצוב
-                with st.expander(f"{label}: {names[i]} (ציון: {score}/10)"):
-                    st.markdown(f"**הסבר**: {advice}")
-                    st.markdown(f"**סעיפים שנשלחו ל־GPT:**\n{section_summaries[i]}")
-
-                results.append(f"{label}: {names[i]} (ציון: {score}/10)")
-
-            except Exception as e:
-                results.append(f"⚠️ שגיאה בפיענוח תגובת GPT: {e}")
-
-        return results
+        return output
 
     except Exception as e:
-        return [f"שגיאה באחזור {label.lower()}ים: {e}"]
+        return [(f"שגיאה באחזור {label.lower()}ים", str(e))]
 
 
 
 async def find_relevant_judgments(text):
-    return await find_relevant_documents(text, judgment_index, judgment_collection, "CaseNumber", "Name", "Description", "פסק דין")
-
-async def find_relevant_laws(text):
-    return await find_relevant_documents(text, law_index, law_collection, "IsraelLawID", "Name", "Description", "חוק")
-
-async def generate_response(user_input):
-    context = "אתה עוזר משפטי מקצועי בדין הישראלי. ענה בקצרה ובמדויק."
-    if "doc_summary" in st.session_state:
-        context += f"\nהמסמך מסוכם כך: {st.session_state['doc_summary']}"
-
-    # אפשרות שליטה מהמשתמש אם להפעיל full segments
-    st.session_state["show_all_segments"] = st.checkbox("💡 הצג את כל הסעיפים במסמכים")
-
-    judgments, laws = await asyncio.gather(
-        find_relevant_judgments(user_input),
-        find_relevant_laws(user_input)
+    return await find_relevant_documents_fulltext(
+        text, judgment_index, judgment_collection,
+        id_field="CaseNumber", name_field="Name", desc_field="Description", label="פסק דין"
     )
 
-    context += "\n\n📚 פסקי דין רלוונטיים:\n" + "\n".join(judgments)
-    context += "\n\n⚖️ חוקים רלוונטיים:\n" + "\n".join(laws)
+async def find_relevant_laws(text):
+    return await find_relevant_documents_fulltext(
+        text, law_index, law_collection,
+        id_field="IsraelLawID", name_field="Name", desc_field="Description", label="חוק"
+    )
 
-    messages = [{"role": "system", "content": context}]
-    messages += [{"role": m["role"], "content": m["content"]} for m in st.session_state["messages"][-5:]]
-    messages.append({"role": "user", "content": user_input})
+
+async def generate_response_strict(user_input, k=3):
+    raw_judgments = await find_relevant_judgments(user_input)
+    raw_laws = await find_relevant_laws(user_input)
+
+    raw_judgments = raw_judgments[:k]
+    raw_laws = raw_laws[:k]
+
+    judgment_texts = "\n\n".join([
+        f"📘 פסק דין: {name}\n{content}" for name, content in raw_judgments
+    ]) if raw_judgments else "לא נמצאו פסקי דין."
+
+    law_texts = "\n\n".join([
+        f"📗 חוק: {name}\n{content}" for name, content in raw_laws
+    ]) if raw_laws else "לא נמצאו חוקים."
+
+    # ✨ סיכום וסוג המסמך המצורף
+    uploaded_summary = st.session_state.get("doc_summary", "")
+    doc_type = st.session_state.get("doc_type", "מסמך משפטי")
+    document_text_block = (
+        f"\n\n📄 סיכום ה־{doc_type} שצורף:\n{uploaded_summary}"
+        if uploaded_summary else ""
+    )
+
+    # 🧠 היסטוריית שיחה קודמת (לשאלות המשך)
+    history = ""
+    for msg in st.session_state["messages"][-6:]:  # עד 6 הודעות אחרונות
+        role_label = "משתמש" if msg["role"] == "user" else "בוט"
+        history += f"{role_label}: {msg['content']}\n"
+
+    # 📜 ניסוח פרומפט מקצועי
+    prompt = f"""
+אתה יועץ משפטי מקצועי המתמחה בדין הישראלי.
+
+היסטוריית שיחה:
+{history}
+
+המטרה שלך היא לענות על השאלה המשפטית המופיעה מטה – אך ורק על בסיס המסמכים המצורפים. 
+כל טענה משפטית חייבת להתבסס על אחד מהמסמכים: החוק, פסק הדין, או {doc_type.lower()} שצורף.
+אין להשתמש בידע כללי, ואין להמציא מידע.
+
+---
+
+❓ שאלה:
+{user_input}
+
+{document_text_block}
+
+---
+
+📚 מסמכים משפטיים:
+
+{law_texts}
+
+{judgment_texts}
+
+---
+
+אנא השב תשובה משפטית מקצועית, ברורה, ממוקדת ומנומקת, עם הפניות מדויקות למקורות (למשל: "סעיף 7 ב־{doc_type.lower()}", "סעיף 3 לחוק", או "פסק הדין פלוני נגד אלמוני").
+"""
 
     response = await client_openai.chat.completions.create(
         model="gpt-4",
-        messages=messages,
-        max_tokens=700,
-        temperature=0.7
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=800
     )
+
     return response.choices[0].message.content.strip()
+
+
 
 
 def display_messages():
@@ -255,19 +255,44 @@ else:
         st.markdown('</div>', unsafe_allow_html=True)
 
     uploaded_file = st.file_uploader("📄 העלה מסמך משפטי", type=["pdf", "docx"])
-    if uploaded_file:
-        st.session_state["uploaded_doc_text"] = read_pdf(uploaded_file) if uploaded_file.type == "application/pdf" else read_docx(uploaded_file)
-        st.success("המסמך נטען בהצלחה!")
 
-    if "uploaded_doc_text" in st.session_state and st.button("📋 סכם את המסמך"):
-        with st.spinner("GPT מסכם את המסמך..."):
-            summary_prompt = f"""סכם את המסמך המשפטי הבא בקצרה:\n---\n{st.session_state['uploaded_doc_text']}"""
-            response = asyncio.run(client_openai.chat.completions.create(
-                model="gpt-4",
-                messages=[{"role": "user", "content": summary_prompt}],
-                temperature=0.5
-            ))
-            st.session_state["doc_summary"] = response.choices[0].message.content.strip()
+if uploaded_file:
+    # קריאת הטקסט מהקובץ
+    st.session_state["uploaded_doc_text"] = read_pdf(uploaded_file) if uploaded_file.type == "application/pdf" else read_docx(uploaded_file)
+    st.success("המסמך נטען בהצלחה!")
+
+    # סיווג אוטומטי של סוג המסמך (חוזה, מכתב וכו')
+    with st.spinner("📑 מסווג את סוג המסמך..."):
+        classify_prompt = f"""
+        סווג את סוג המסמך הבא לאחת מהקטגוריות: חוזה, מכתב, תקנון, תביעה, פסק דין, אחר.
+        החזר רק את שם הקטגוריה המתאימה ביותר.
+
+        ---
+        {st.session_state["uploaded_doc_text"][:1500]}
+        ---
+        """
+        classification_response = asyncio.run(client_openai.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": classify_prompt}],
+            temperature=0,
+            max_tokens=10
+        ))
+        doc_type = classification_response.choices[0].message.content.strip()
+        st.session_state["doc_type"] = doc_type
+        st.success(f"📄 סוג המסמך שזוהה: {doc_type}")
+
+# כפתור סיכום מופיע רק אחרי טעינת הטקסט
+if "uploaded_doc_text" in st.session_state and st.button("📋 סכם את המסמך"):
+    with st.spinner("GPT מסכם את המסמך..."):
+        summary_prompt = f"""סכם את המסמך המשפטי הבא בקצרה:\n---\n{st.session_state['uploaded_doc_text']}"""
+        summary_response = asyncio.run(client_openai.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": summary_prompt}],
+            temperature=0.5
+        ))
+        st.session_state["doc_summary"] = summary_response.choices[0].message.content.strip()
+        st.success("📃 המסמך סוכם בהצלחה.")
+
 
     if "doc_summary" in st.session_state:
         st.markdown("### סיכום המסמך:")
@@ -281,15 +306,30 @@ else:
             st.rerun()
 
     if st.session_state['messages'] and st.session_state['messages'][-1]['role'] == "user":
-        typing = show_typing_realtime()
-        response = asyncio.run(generate_response(st.session_state['messages'][-1]['content']))
-        typing.empty()
-        add_message("assistant", response)
-        save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
-        st.rerun()
+    typing = show_typing_realtime()
+    user_input = st.session_state['messages'][-1]['content']
+
+    # הפקת תשובה לשאלה
+    response = asyncio.run(generate_response_strict(user_input))
+
+    typing.empty()
+    add_message("assistant", response)
+    save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
+    st.rerun()
+
+# ✅ שאלת המשך (follow-up)
+if st.session_state.get("user_name") and st.session_state.get("messages"):
+    with st.form("follow_up_form", clear_on_submit=True):
+        follow_up = st.text_input("🔁 שאל שאלה נוספת על בסיס התשובה הקודמת:")
+        if st.form_submit_button("שלח שאלה נוספת") and follow_up.strip():
+            add_message("user", follow_up.strip())
+            save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
+            st.rerun()
+
 
     if st.button("🗑 נקה שיחה"):
         delete_conversation(chat_id)
         st.session_state["messages"] = []
         st.session_state["user_name"] = None
         st.rerun()
+
