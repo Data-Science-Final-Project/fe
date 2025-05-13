@@ -233,13 +233,17 @@ def display_messages():
             unsafe_allow_html=True
         )
 # ===== App =====
+# כותרת ראשית
 st.markdown('<div class="chat-header">💬 Ask Mini Lawyer</div>', unsafe_allow_html=True)
 chat_id = get_or_create_chat_id()
+
+# טעינת שם משתמש ושיחה
 if "user_name" not in st.session_state:
     st.session_state["user_name"] = None
 if "messages" not in st.session_state:
     st.session_state["messages"] = load_conversation(chat_id)
 
+# התחברות ראשונית
 if not st.session_state["user_name"]:
     with st.form("user_name_form"):
         name = st.text_input("הכנס שם להתחלת שיחה:")
@@ -248,6 +252,7 @@ if not st.session_state["user_name"]:
             add_message("assistant", f"שלום {name}, איך אפשר לעזור?")
             save_conversation(chat_id, name, st.session_state["messages"])
             st.rerun()
+
 else:
     with st.container():
         st.markdown('<div class="chat-container">', unsafe_allow_html=True)
@@ -256,48 +261,48 @@ else:
 
     uploaded_file = st.file_uploader("📄 העלה מסמך משפטי", type=["pdf", "docx"])
 
-if uploaded_file:
-    # קריאת הטקסט מהקובץ
-    st.session_state["uploaded_doc_text"] = read_pdf(uploaded_file) if uploaded_file.type == "application/pdf" else read_docx(uploaded_file)
-    st.success("המסמך נטען בהצלחה!")
+    if uploaded_file:
+        st.session_state["uploaded_doc_text"] = read_pdf(uploaded_file) if uploaded_file.type == "application/pdf" else read_docx(uploaded_file)
+        st.success("המסמך נטען בהצלחה!")
 
-    # סיווג אוטומטי של סוג המסמך (חוזה, מכתב וכו')
-    with st.spinner("📑 מסווג את סוג המסמך..."):
-        classify_prompt = f"""
-        סווג את סוג המסמך הבא לאחת מהקטגוריות: חוזה, מכתב, תקנון, תביעה, פסק דין, אחר.
-        החזר רק את שם הקטגוריה המתאימה ביותר.
+        # סיווג המסמך
+        with st.spinner("📑 מסווג את סוג המסמך..."):
+            classify_prompt = f"""
+            סווג את סוג המסמך הבא לאחת מהקטגוריות: חוזה, מכתב, תקנון, תביעה, פסק דין, אחר.
+            החזר רק את שם הקטגוריה המתאימה ביותר.
 
-        ---
-        {st.session_state["uploaded_doc_text"][:1500]}
-        ---
-        """
-        classification_response = asyncio.run(client_openai.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": classify_prompt}],
-            temperature=0,
-            max_tokens=10
-        ))
-        doc_type = classification_response.choices[0].message.content.strip()
-        st.session_state["doc_type"] = doc_type
-        st.success(f"📄 סוג המסמך שזוהה: {doc_type}")
+            ---
+            {st.session_state["uploaded_doc_text"][:1500]}
+            ---
+            """
+            classification_response = asyncio.run(client_openai.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": classify_prompt}],
+                temperature=0,
+                max_tokens=10
+            ))
+            doc_type = classification_response.choices[0].message.content.strip()
+            st.session_state["doc_type"] = doc_type
+            st.success(f"📄 סוג המסמך שזוהה: {doc_type}")
 
-# כפתור סיכום מופיע רק אחרי טעינת הטקסט
-if "uploaded_doc_text" in st.session_state and st.button("📋 סכם את המסמך"):
-    with st.spinner("GPT מסכם את המסמך..."):
-        summary_prompt = f"""סכם את המסמך המשפטי הבא בקצרה:\n---\n{st.session_state['uploaded_doc_text']}"""
-        summary_response = asyncio.run(client_openai.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": summary_prompt}],
-            temperature=0.5
-        ))
-        st.session_state["doc_summary"] = summary_response.choices[0].message.content.strip()
-        st.success("📃 המסמך סוכם בהצלחה.")
+    # סיכום המסמך
+    if "uploaded_doc_text" in st.session_state and st.button("📋 סכם את המסמך"):
+        with st.spinner("GPT מסכם את המסמך..."):
+            summary_prompt = f"""סכם את המסמך המשפטי הבא בקצרה:\n---\n{st.session_state['uploaded_doc_text']}"""
+            summary_response = asyncio.run(client_openai.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": summary_prompt}],
+                temperature=0.5
+            ))
+            st.session_state["doc_summary"] = summary_response.choices[0].message.content.strip()
+            st.success("📃 המסמך סוכם בהצלחה.")
 
-
+    # הצגת סיכום
     if "doc_summary" in st.session_state:
         st.markdown("### סיכום המסמך:")
         st.info(st.session_state["doc_summary"])
 
+    # טופס שאלה משפטית
     with st.form("chat_form"):
         user_input = st.text_area("הכנס שאלה משפטית", height=100)
         if st.form_submit_button("שלח שאלה") and user_input.strip():
@@ -305,31 +310,32 @@ if "uploaded_doc_text" in st.session_state and st.button("📋 סכם את המ�
             save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
             st.rerun()
 
-    if st.session_state['messages'] and st.session_state['messages'][-1]['role'] == "user":
-    typing = show_typing_realtime()
-    user_input = st.session_state['messages'][-1]['content']
+    # הפקת תשובה אוטומטית לאחר שאלה
+    if st.session_state.get("messages") and st.session_state["messages"][-1]["role"] == "user":
+        typing = show_typing_realtime()
+        user_input = st.session_state["messages"][-1]["content"]
 
-    # הפקת תשובה לשאלה
-    response = asyncio.run(generate_response_strict(user_input))
+        response = asyncio.run(generate_response_strict(user_input))
 
-    typing.empty()
-    add_message("assistant", response)
-    save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
-    st.rerun()
+        typing.empty()
+        add_message("assistant", response)
+        save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
+        st.rerun()
 
-# ✅ שאלת המשך (follow-up)
-if st.session_state.get("user_name") and st.session_state.get("messages"):
-    with st.form("follow_up_form", clear_on_submit=True):
-        follow_up = st.text_input("🔁 שאל שאלה נוספת על בסיס התשובה הקודמת:")
-        if st.form_submit_button("שלח שאלה נוספת") and follow_up.strip():
-            add_message("user", follow_up.strip())
-            save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
-            st.rerun()
+    # שאלת המשך
+    if st.session_state.get("messages"):
+        with st.form("follow_up_form", clear_on_submit=True):
+            follow_up = st.text_input("🔁 שאל שאלה נוספת על בסיס התשובה הקודמת:")
+            if st.form_submit_button("שלח שאלה נוספת") and follow_up.strip():
+                add_message("user", follow_up.strip())
+                save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
+                st.rerun()
 
-
+    # ניקוי שיחה
     if st.button("🗑 נקה שיחה"):
         delete_conversation(chat_id)
         st.session_state["messages"] = []
         st.session_state["user_name"] = None
         st.rerun()
+
 
