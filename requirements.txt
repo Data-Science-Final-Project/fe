@@ -82,3 +82,4 @@ watchdog==6.0.0
 websockets==14.1
 PyMuPDF==1.23.9
 python-docx
+matplotlib==3.8.4
