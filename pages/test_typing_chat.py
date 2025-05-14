@@ -1,4 +1,3 @@
-
 import os
 import streamlit as st
 import torch
@@ -138,8 +137,6 @@ async def find_relevant_documents_fulltext(
     except Exception as e:
         return [(f"שגיאה באחזור {label.lower()}ים", str(e))]
 
-
-
 async def find_relevant_judgments(text):
     return await find_relevant_documents_fulltext(
         text, judgment_index, judgment_collection,
@@ -152,94 +149,41 @@ async def find_relevant_laws(text):
         id_field="IsraelLawID", name_field="Name", desc_field="Description", label="חוק"
     )
 
+# ===== פונקציה אחת לשליחת שאלה או שאלת המשך =====
+async def handle_question_submission(user_input, chat_id, is_follow_up=False):
+    # אם מדובר בשאלת המשך, נדאג להוסיף היסטוריית שיחה קודמת
+    if is_follow_up:
+        history = ""
+        for msg in st.session_state["messages"][-6:]:  # עד 6 הודעות אחרונות
+            role_label = "משתמש" if msg["role"] == "user" else "בוט"
+            history += f"{role_label}: {msg['content']}\n"
+    else:
+        history = ""  # אין היסטוריה בשאלת פתיחה
 
-async def generate_response_strict(user_input, k=3):
-    raw_judgments = await find_relevant_judgments(user_input)
-    raw_laws = await find_relevant_laws(user_input)
+    # הפקת תשובה עם חיפוש סמנטי
+    response = await generate_response_strict(user_input)
 
-    raw_judgments = raw_judgments[:k]
-    raw_laws = raw_laws[:k]
+    # הוספת ההודעה החדשה (שאלה או שאלת המשך)
+    add_message("user", user_input)
+    save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
 
-    judgment_texts = "\n\n".join([
-        f"📘 פסק דין: {name}\n{content}" for name, content in raw_judgments
-    ]) if raw_judgments else "לא נמצאו פסקי דין."
+    # שליחה של התשובה מהבוט
+    add_message("assistant", response)
+    save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
 
-    law_texts = "\n\n".join([
-        f"📗 חוק: {name}\n{content}" for name, content in raw_laws
-    ]) if raw_laws else "לא נמצאו חוקים."
+    st.rerun()
 
-    # ✨ סיכום וסוג המסמך המצורף
-    uploaded_summary = st.session_state.get("doc_summary", "")
-    doc_type = st.session_state.get("doc_type", "מסמך משפטי")
-    document_text_block = (
-        f"\n\n📄 סיכום ה־{doc_type} שצורף:\n{uploaded_summary}"
-        if uploaded_summary else ""
-    )
-
-    # 🧠 היסטוריית שיחה קודמת (לשאלות המשך)
-    history = ""
-    for msg in st.session_state["messages"][-6:]:  # עד 6 הודעות אחרונות
-        role_label = "משתמש" if msg["role"] == "user" else "בוט"
-        history += f"{role_label}: {msg['content']}\n"
-
-    # 📜 ניסוח פרומפט מקצועי
-    prompt = f"""
-אתה יועץ משפטי מקצועי המתמחה בדין הישראלי.
-
-היסטוריית שיחה:
-{history}
-
-המטרה שלך היא לענות על השאלה המשפטית המופיעה מטה – אך ורק על בסיס המסמכים המצורפים. 
-כל טענה משפטית חייבת להתבסס על אחד מהמסמכים: החוק, פסק הדין, או {doc_type.lower()} שצורף.
-אין להשתמש בידע כללי, ואין להמציא מידע.
-
----
-
-❓ שאלה:
-{user_input}
-
-{document_text_block}
-
----
-
-📚 מסמכים משפטיים:
-
-{law_texts}
-
-{judgment_texts}
-
----
-
-אנא השב תשובה משפטית מקצועית, ברורה, ממוקדת ומנומקת, עם הפניות מדויקות למקורות (למשל: "סעיף 7 ב־{doc_type.lower()}", "סעיף 3 לחוק", או "פסק הדין פלוני נגד אלמוני").
-"""
-
-    response = await client_openai.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        max_tokens=800
-    )
-
-    return response.choices[0].message.content.strip()
-
-
-
-
-def display_messages():
-    for msg in st.session_state['messages']:
-        role = "user-message" if msg['role'] == "user" else "bot-message"
-        st.markdown(
-            f"<div class='{role}'>{msg['content']}<div class='timestamp'>{msg['timestamp']}</div></div>",
-            unsafe_allow_html=True
-        )
-# ===== App =====
+# ===== קוד הממשק הגרפי (UI) =====
 st.markdown('<div class="chat-header">💬 Ask Mini Lawyer</div>', unsafe_allow_html=True)
 chat_id = get_or_create_chat_id()
+
+# טעינת שם משתמש ושיחה
 if "user_name" not in st.session_state:
     st.session_state["user_name"] = None
 if "messages" not in st.session_state:
     st.session_state["messages"] = load_conversation(chat_id)
 
+# התחברות ראשונית
 if not st.session_state["user_name"]:
     with st.form("user_name_form"):
         name = st.text_input("הכנס שם להתחלת שיחה:")
@@ -248,6 +192,7 @@ if not st.session_state["user_name"]:
             add_message("assistant", f"שלום {name}, איך אפשר לעזור?")
             save_conversation(chat_id, name, st.session_state["messages"])
             st.rerun()
+
 else:
     with st.container():
         st.markdown('<div class="chat-container">', unsafe_allow_html=True)
@@ -301,35 +246,26 @@ if "uploaded_doc_text" in st.session_state and st.button("📋 סכם את המ�
     with st.form("chat_form"):
         user_input = st.text_area("הכנס שאלה משפטית", height=100)
         if st.form_submit_button("שלח שאלה") and user_input.strip():
-            add_message("user", user_input)
-            save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
-            st.rerun()
+            # שליחה של השאלה הראשונה
+            await handle_question_submission(user_input, chat_id, is_follow_up=False)
 
     if st.session_state['messages'] and st.session_state['messages'][-1]['role'] == "user":
-    typing = show_typing_realtime()
-    user_input = st.session_state['messages'][-1]['content']
+        typing = show_typing_realtime()
+        user_input = st.session_state['messages'][-1]['content']
 
-    # הפקת תשובה לשאלה
-    response = asyncio.run(generate_response_strict(user_input))
-
-    typing.empty()
-    add_message("assistant", response)
-    save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
-    st.rerun()
+        # הפקת תשובה לשאלה
+        await handle_question_submission(user_input, chat_id, is_follow_up=False)
 
 # ✅ שאלת המשך (follow-up)
 if st.session_state.get("user_name") and st.session_state.get("messages"):
     with st.form("follow_up_form", clear_on_submit=True):
         follow_up = st.text_input("🔁 שאל שאלה נוספת על בסיס התשובה הקודמת:")
         if st.form_submit_button("שלח שאלה נוספת") and follow_up.strip():
-            add_message("user", follow_up.strip())
-            save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
-            st.rerun()
-
+            # שליחה של שאלת המשך
+            await handle_question_submission(follow_up.strip(), chat_id, is_follow_up=True)
 
     if st.button("🗑 נקה שיחה"):
         delete_conversation(chat_id)
         st.session_state["messages"] = []
         st.session_state["user_name"] = None
         st.rerun()
-
