@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import matplotlib.ticker as ticker
 from matplotlib import rcParams
+import os
 
 # 📄 הגדרת הדף
 rcParams['font.family'] = 'Arial'
@@ -12,7 +13,11 @@ st.set_page_config(page_title="דשבורד עורכי דין", layout="wide")
 # 🎯 טעינת הדאטה
 @st.cache_data
 def load_data():
-    df = pd.read_csv("lawyers_with_case_info.csv")
+    # df = pd.read_csv("lawyers_with_case_info.csv")
+    current_dir = os.path.dirname(__file__)  # Get current script directory
+    file_path = os.path.join(current_dir, "lawyers_with_case_info.csv")
+    df = pd.read_csv(file_path)
+    return df
     return df
 
 def reverse_hebrew(s):
