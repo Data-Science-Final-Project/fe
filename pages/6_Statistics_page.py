@@ -18,7 +18,7 @@ st.set_page_config(page_title="Statistics & Lawyers Dashboard",
 torch.classes.__path__ = []
 
 # --- PAGE CONFIG ---
-rcParams['font.family'] = 'Arial'
+rcParams['font.family'] = 'DejaVu Sans'
 
 DATABASE_NAME = os.getenv('DATABASE_NAME')
 LAWS_COLLECTION = "laws"
@@ -266,7 +266,7 @@ if selected_dashboard == "Lawyers Statistics":
                 return court, case_name
             else:
                 return "", full_name
-        lawyer_df[["בית משפט", "שם תיק"]] = lawyer_df["CaseName"].apply(
+        lawyer_df.loc[:, ["בית משפט", "שם תיק"]] = lawyer_df["CaseName"].apply(
             lambda x: pd.Series(split_case_name(x)))
 
         def make_button(url):
@@ -288,7 +288,8 @@ if selected_dashboard == "Lawyers Statistics":
                 >מעבר לפסק הדין</button>
             </a>
             """
-        lawyer_df["מעבר לפסק הדין"] = lawyer_df["CaseURL"].apply(make_button)
+        lawyer_df.loc[:, "מעבר לפסק הדין"] = lawyer_df["CaseURL"].apply(
+            make_button)
         final_table = lawyer_df[["שם תיק", "בית משפט", "מעבר לפסק הדין"]]
         st.write(
             final_table.to_html(escape=False, index=False),
