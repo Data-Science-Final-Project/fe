@@ -3,6 +3,7 @@ import json
 from pyvis.network import Network
 import tempfile
 import streamlit.components.v1 as components
+import os
 
 
 @st.cache_data
@@ -18,8 +19,10 @@ def load_graph_json(path):
     return nodes, relationships
 
 
-nodes_dict, relationships_list = load_graph_json(
-    "data/pages/merged_graph.json")
+# Fix: load from the data folder at the project root
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+graph_path = os.path.join(project_root, "data", "merged_graph.json")
+nodes_dict, relationships_list = load_graph_json(graph_path)
 
 st.title("Relationship Viewer")
 st.markdown(
