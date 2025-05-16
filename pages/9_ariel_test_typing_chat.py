@@ -42,8 +42,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ===== Functions =====
-def get_localstorage_value(key): return st_js_blocking(f"return localStorage.getItem('{key}');", key="get_" + key)
-def set_localstorage_value(key, value): st_js(f"localStorage.setItem('{key}', '{value}');")
+
+
+def get_localstorage_value(key): return st_js_blocking(
+    f"return localStorage.getItem('{key}');", key="get_" + key)
+
+
+def set_localstorage_value(key, value): st_js(
+    f"localStorage.setItem('{key}', '{value}');")
+
 
 def get_or_create_chat_id():
     if 'current_chat_id' not in st.session_state:
@@ -54,32 +61,41 @@ def get_or_create_chat_id():
         st.session_state.current_chat_id = chat_id
     return st.session_state.current_chat_id
 
+
 def save_conversation(chat_id, user_name, messages):
     conversation_collection.update_one(
         {"local_storage_id": chat_id},
-        {"$set": {"local_storage_id": chat_id, "user_name": user_name, "messages": messages}},
+        {"$set": {"local_storage_id": chat_id,
+                  "user_name": user_name, "messages": messages}},
         upsert=True
     )
+
 
 def load_conversation(chat_id):
     convo = conversation_collection.find_one({"local_storage_id": chat_id})
     return convo.get('messages', []) if convo else []
+
 
 def delete_conversation(chat_id):
     conversation_collection.delete_one({"local_storage_id": chat_id})
     st_js("localStorage.clear();")
     st.session_state.current_chat_id = None
 
+
 def read_pdf(file):
     return "".join([page.get_text() for page in fitz.open(stream=file.read(), filetype="pdf")])
+
 
 def read_docx(file):
     return "\n".join([p.text for p in docx.Document(file).paragraphs])
 
+
 def show_typing_realtime(msg="🧐 הבוט מקליד..."):
     ph = st.empty()
-    ph.markdown(f"<div style='color:gray;'>{msg}</div>", unsafe_allow_html=True)
+    ph.markdown(
+        f"<div style='color:gray;'>{msg}</div>", unsafe_allow_html=True)
     return ph
+
 
 def add_message(role, content):
     st.session_state['messages'].append({
@@ -87,6 +103,8 @@ def add_message(role, content):
     })
 
 # ===== Async Document Retrieval Engine =====
+
+
 async def find_relevant_documents_fulltext(
     text, index, mongo_collection,
     id_field, name_field, desc_field, label,
@@ -125,12 +143,15 @@ async def find_relevant_documents_fulltext(
                     section_texts.append(f"סעיף {number}: {title}\n{content}")
 
             if section_texts:
-                section_embeddings = model.encode(section_texts, normalize_embeddings=True)
-                similarities = cosine_similarity([question_embedding], section_embeddings)[0]
+                section_embeddings = model.encode(
+                    section_texts, normalize_embeddings=True)
+                similarities = cosine_similarity(
+                    [question_embedding], section_embeddings)[0]
                 top_indices = np.argsort(similarities)[::-1][:max_sections]
 
                 top_sections = [section_texts[i] for i in top_indices]
-                top_text = f"תיאור כללי: {desc}\n\n" + "\n\n".join(top_sections)
+                top_text = f"תיאור כללי: {desc}\n\n" + \
+                    "\n\n".join(top_sections)
                 output.append((name, top_text))
 
         return output
@@ -139,12 +160,12 @@ async def find_relevant_documents_fulltext(
         return [(f"שגיאה באחזור {label.lower()}ים", str(e))]
 
 
-
 async def find_relevant_judgments(text):
     return await find_relevant_documents_fulltext(
         text, judgment_index, judgment_collection,
         id_field="CaseNumber", name_field="Name", desc_field="Description", label="פסק דין"
     )
+
 
 async def find_relevant_laws(text):
     return await find_relevant_documents_fulltext(
@@ -189,7 +210,7 @@ async def generate_response_strict(user_input, k=3):
 היסטוריית שיחה:
 {history}
 
-המטרה שלך היא לענות על השאלה המשפטית המופיעה מטה – אך ורק על בסיס המסמכים המצורפים. 
+המטרה שלך היא לענות על השאלה המשפטית המופיעה מטה – אך ורק על בסיס המסמכים המצורפים.
 כל טענה משפטית חייבת להתבסס על אחד מהמסמכים: החוק, פסק הדין, או {doc_type.lower()} שצורף.
 אין להשתמש בידע כללי, ואין להמציא מידע.
 
@@ -223,8 +244,6 @@ async def generate_response_strict(user_input, k=3):
     return response.choices[0].message.content.strip()
 
 
-
-
 def display_messages():
     for msg in st.session_state['messages']:
         role = "user-message" if msg['role'] == "user" else "bot-message"
@@ -232,9 +251,12 @@ def display_messages():
             f"<div class='{role}'>{msg['content']}<div class='timestamp'>{msg['timestamp']}</div></div>",
             unsafe_allow_html=True
         )
+
+
 # ===== App =====
 # כותרת ראשית
-st.markdown('<div class="chat-header">💬 Ask Mini Lawyer</div>', unsafe_allow_html=True)
+st.markdown('<div class="chat-header">💬 Ask Mini Lawyer</div>',
+            unsafe_allow_html=True)
 chat_id = get_or_create_chat_id()
 
 # טעינת שם משתמש ושיחה
@@ -262,7 +284,8 @@ else:
     uploaded_file = st.file_uploader("📄 העלה מסמך משפטי", type=["pdf", "docx"])
 
     if uploaded_file:
-        st.session_state["uploaded_doc_text"] = read_pdf(uploaded_file) if uploaded_file.type == "application/pdf" else read_docx(uploaded_file)
+        st.session_state["uploaded_doc_text"] = read_pdf(
+            uploaded_file) if uploaded_file.type == "application/pdf" else read_docx(uploaded_file)
         st.success("המסמך נטען בהצלחה!")
 
         # סיווג המסמך
@@ -281,7 +304,8 @@ else:
                 temperature=0,
                 max_tokens=10
             ))
-            doc_type = classification_response.choices[0].message.content.strip()
+            doc_type = classification_response.choices[0].message.content.strip(
+            )
             st.session_state["doc_type"] = doc_type
             st.success(f"📄 סוג המסמך שזוהה: {doc_type}")
 
@@ -294,7 +318,8 @@ else:
                 messages=[{"role": "user", "content": summary_prompt}],
                 temperature=0.5
             ))
-            st.session_state["doc_summary"] = summary_response.choices[0].message.content.strip()
+            st.session_state["doc_summary"] = summary_response.choices[0].message.content.strip(
+            )
             st.success("📃 המסמך סוכם בהצלחה.")
 
     # הצגת סיכום
@@ -307,7 +332,8 @@ else:
         user_input = st.text_area("הכנס שאלה משפטית", height=100)
         if st.form_submit_button("שלח שאלה") and user_input.strip():
             add_message("user", user_input)
-            save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
+            save_conversation(
+                chat_id, st.session_state["user_name"], st.session_state["messages"])
             st.rerun()
 
     # הפקת תשובה אוטומטית לאחר שאלה
@@ -319,16 +345,19 @@ else:
 
         typing.empty()
         add_message("assistant", response)
-        save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
+        save_conversation(
+            chat_id, st.session_state["user_name"], st.session_state["messages"])
         st.rerun()
 
     # שאלת המשך
     if st.session_state.get("messages"):
         with st.form("follow_up_form", clear_on_submit=True):
-            follow_up = st.text_input("🔁 שאל שאלה נוספת על בסיס התשובה הקודמת:")
+            follow_up = st.text_input(
+                "🔁 שאל שאלה נוספת על בסיס התשובה הקודמת:")
             if st.form_submit_button("שלח שאלה נוספת") and follow_up.strip():
                 add_message("user", follow_up.strip())
-                save_conversation(chat_id, st.session_state["user_name"], st.session_state["messages"])
+                save_conversation(
+                    chat_id, st.session_state["user_name"], st.session_state["messages"])
                 st.rerun()
 
     # ניקוי שיחה
@@ -337,5 +366,3 @@ else:
         st.session_state["messages"] = []
         st.session_state["user_name"] = None
         st.rerun()
-
-
