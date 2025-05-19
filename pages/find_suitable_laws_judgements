@@ -1,0 +1,172 @@
+import streamlit as st
+import os
+import torch
+import json
+from openai import OpenAI
+from app_resources import model, mongo_client, pinecone_client
+
+# === Page Config & Styling ===
+st.set_page_config(page_title="Legal Finder Assistant", page_icon="⚖️", layout="wide")
+torch.classes.__path__ = []
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+st.markdown("""
+    <style>
+        .law-card {
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0px 2px 4px rgba(0,0,0,0.1);
+            background-color: #f9f9f9;
+        }
+        .law-title {
+            font-size: 20px;
+            font-weight: bold;
+            color: #333;
+        }
+        .law-description {
+            font-size: 16px;
+            color: #444;
+            margin: 10px 0;
+        }
+        .law-meta {
+            font-size: 14px;
+            color: #555;
+        }
+        .stButton>button {
+            background-color: #7ce38b;
+            color: white;
+            font-size: 14px;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .stButton>button:hover {
+            background-color: #7ce38b;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# === Constants & Setup ===
+OPENAI_API_KEY = os.getenv("OPEN_AI")
+DATABASE_NAME = os.getenv("DATABASE_NAME")
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+db = mongo_client[DATABASE_NAME]
+
+# === Helper Functions ===
+
+def load_document_details(source_type, doc_id):
+    collection = db["judgments"] if source_type == "Judgment" else db["laws"]
+    key = "CaseNumber" if source_type == "Judgment" else "IsraelLawID"
+    try:
+        return collection.find_one({key: doc_id})
+    except Exception as e:
+        st.error(f"Error loading details: {str(e)}")
+        return None
+
+def get_explanation(scenario, doc, source_type):
+    name = doc.get("Name", "")
+    desc = doc.get("Description", "")
+    if source_type == "Judgment":
+        prompt = f"""בהתבסס על הסצנריו הבא:
+{scenario}
+
+וכן על פרטי פסק הדין הבא:
+שם: {name}
+תיאור: {desc}
+
+אנא הסבר בצורה תמציתית ומקצועית מדוע פסק דין זה יכול לעזור למקרה זה, והערך אותו בסולם של 0 עד 10 כאשר 0 - אינו עוזר כלל ו-10 - מתאים במדויק.
+החזר את התשובה בפורמט JSON בלבד, לדוגמה:
+{{
+  "advice": "הסבר מקצועי בעברית",
+  "score": 8
+}}"""
+    else:
+        prompt = f"""בהתבסס על הסצנריו הבא:
+{scenario}
+
+וכן על פרטי החוק הבא:
+שם: {name}
+תיאור: {desc}
+
+אנא הסבר בצורה תמציתית ומקצועית מדוע חוק זה יכול לעזור למקרה זה, והערך אותו בסולם של 0 עד 10 כאשר 0 החוק לא יכול לעזור בכלל ולא קשור לנושא ו10 החוק מתאים כמו כפפה והוא בדיוק מה שהמשתמש תיאר והחוק יעזור לו למקרה, תהיה נוקשה בציון.
+החזר את התשובה בפורמט JSON בלבד, לדוגמה:
+{{
+  "advice": "הסבר תמציתי ומקצועי בעברית",
+  "score": 8
+}}"""
+    try:
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7
+        )
+        return json.loads(response.choices[0].message.content.strip())
+    except Exception as e:
+        st.error(f"Error from GPT: {e}")
+        return {"advice": "לא ניתן לקבל הסבר בשלב זה.", "score": "N/A"}
+
+# === Main App ===
+
+st.title("Legal Finder Assistant")
+
+source_type = st.selectbox("Choose what to search:", ["Judgment", "Law"])
+scenario = st.text_area("Describe your scenario:")
+
+if st.button("Find Suitable Results") and scenario:
+    with st.spinner("Generating query embedding..."):
+        query_embedding = model.encode([scenario], normalize_embeddings=True)[0]
+
+    index_name = "judgments-names" if source_type == "Judgment" else "laws-names"
+    id_key = "CaseNumber" if source_type == "Judgment" else "IsraelLawID"
+    index = pinecone_client.Index(index_name)
+
+    with st.spinner("Querying Pinecone for similar results..."):
+        query_response = index.query(vector=query_embedding.tolist(), top_k=5, include_metadata=True)
+
+    if query_response and query_response.get("matches"):
+        st.markdown(f"### Suitable {source_type}s Found:")
+        for match in query_response["matches"]:
+            metadata = match.get("metadata", {})
+            doc_id = metadata.get(id_key)
+            if not doc_id:
+                continue
+            doc = load_document_details(source_type, doc_id)
+            if not doc:
+                st.warning(f"No document found for ID: {doc_id}")
+                continue
+
+            name = doc.get("Name", "No Name")
+            description = doc.get("Description", "אין תיאור זמין")
+            date_label = "DecisionDate" if source_type == "Judgment" else "PublicationDate"
+            extra_label = "ProcedureType" if source_type == "Judgment" else None
+
+            st.markdown(f"""
+                <div class="law-card">
+                    <div class="law-title">{name} (ID: {doc_id})</div>
+                    <div class="law-description">{description}</div>
+                    <div class="law-meta">{date_label}: {doc.get(date_label, 'N/A')}</div>
+                    {"<div class='law-meta'>Procedure Type: " + doc.get(extra_label, 'N/A') + "</div>" if extra_label else ""}
+                </div>
+            """, unsafe_allow_html=True)
+
+            with st.spinner("Getting explanation..."):
+                result = get_explanation(scenario, doc, source_type)
+                advice = result.get("advice", "")
+                score = result.get("score", "N/A")
+
+            st.markdown(f"""
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: red;">עצת האתר: {advice}</span>
+                    <span style="font-size: 24px; font-weight: bold; color: red;">{score}/10</span>
+                </div>
+            """, unsafe_allow_html=True)
+
+            if st.button(f"View Full Details for {doc_id}", key=f"details_{doc_id}"):
+                with st.spinner("Loading full details..."):
+                    st.json(doc)
+    else:
+        st.info(f"No similar {source_type.lower()}s found.")
