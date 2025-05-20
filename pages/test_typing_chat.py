@@ -261,22 +261,52 @@ def get_explanation(scen, doc, kind):
 
 def legal_finder_assistant():
     st.title("Legal Finder Assistant")
-    kind = st.selectbox("Choose what to search", ["Judgment","Law"])
+
+    kind = st.selectbox("Choose what to search", ["Judgment", "Law"])
     scen = st.text_area("Describe your scenario")
+
     if st.button("Find Suitable Results") and scen:
         q_emb = model.encode([scen], normalize_embeddings=True)[0]
-        index = judgment_index if kind=="Judgment" else law_index
-        id_key= "CaseNumber" if kind=="Judgment" else "IsraelLawID"
-        res   = index.query(vector=q_emb.tolist(), top_k=5, include_metadata=True)
-        matches = res.get("matches",[])
+        index = judgment_index if kind == "Judgment" else law_index
+        id_key = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
+
+        res = index.query(vector=q_emb.tolist(), top_k=5, include_metadata=True)
+        matches = res.get("matches", [])
         if not matches:
-            st.info("No matches found."); return
+            st.info("No matches found.")
+            return
+
         for m in matches:
-            doc_id = m.get("metadata",{}).get(id_key)
-            if not doc_id: continue
+            doc_id = m.get("metadata", {}).get(id_key)
+            if not doc_id:
+                continue
             doc = load_document_details(kind, doc_id)
-            if not doc: continue
-            name = doc.get("Name","No Name"); desc=doc.get("Description","N/A")
-            date_lbl="DecisionDate" if kind=="Judgment" else "PublicationDate"
-            st.markdown(f"<div class='law-card'><div class='law-title'>{name} (ID: {doc_id})</div><div class='law-description'>{desc}</div><div class='law-meta'>{date_lbl}: {doc.get(date_lbl,'N/A')}</div></div>",unsafe_allow_html=True,
-    )
+            if not doc:
+                continue
+
+            name      = doc.get("Name", "No Name")
+            desc      = doc.get("Description", "N/A")
+            date_lbl  = "DecisionDate" if kind == "Judgment" else "PublicationDate"
+
+            # optional: show procedure type for judgments
+            extra_label = "ProcedureType" if kind == "Judgment" else None
+            extra_html  = (
+                f"<div class='law-meta'>Procedure Type: {doc.get(extra_label, 'N/A')}</div>"
+                if extra_label else ""
+            )
+
+            st.markdown(
+                f"<div class='law-card'>"
+                f"<div class='law-title'>{name} (ID: {doc_id})</div>"
+                f"<div class='law-description'>{desc}</div>"
+                f"<div class='law-meta'>{date_lbl}: {doc.get(date_lbl, 'N/A')}</div>"
+                f"{extra_html}"
+                f"</div>",
+                unsafe_allow_html=True  
+            )
+
+
+if app_mode == "Chat Assistant":
+    chat_assistant()
+else:
+    legal_finder_assistant()
