@@ -162,7 +162,7 @@ def chat_assistant():
         # ---- STRICT Hebrew classification ---------------------------------
         cls_system = (
             "אתה מסווג מסמכים משפטיים. החזר *בדיוק* אחת מהקטגוריות:\n"
-            "חוזה, מכתב, תקנון, תביעה, פסק דין, אחר"
+            "חוזה, מכתב, תקנון, תביעה, פסק דין"
         )
         resp = asyncio.run(
             client_async_openai.chat.completions.create(
@@ -206,46 +206,66 @@ def chat_assistant():
         st.info(st.session_state["doc_summary"])
 
     # ---------- Retrieval helpers ------------------------------------------
-    async def retrieve_sources(question: str):
-        q_emb = model.encode([question], normalize_embeddings=True)[0]
-        section_embs = [
-            model.encode([sec], normalize_embeddings=True)[0]
-            for sec in chunk_text(st.session_state["uploaded_doc_text"])
-        ] if "uploaded_doc_text" in st.session_state else []
+   async def retrieve_sources(question: str):
+    # ---------- Embedding לשאלה -------------------------------------------
+    q_emb = model.encode([question], normalize_embeddings=True)[0]
 
-        candidates = {"law": {}, "judgment": {}}
+    # ---------- Embeddings של סעיפי-המסמך (אם קיים) -----------------------
+    section_embs = (
+        [model.encode([sec], normalize_embeddings=True)[0]
+         for sec in chunk_text(st.session_state["uploaded_doc_text"])]
+        if "uploaded_doc_text" in st.session_state else []
+    )
 
-        async def add_candidate(match, kind):
-            meta   = match.get("metadata", {})
-            score  = match.get("score", 0)
-            doc_id = meta.get("IsraelLawID" if kind == "law" else "CaseNumber")
-            if not doc_id:
-                return
-            doc = (law_collection.find_one({"IsraelLawID": doc_id})
-                   if kind == "law" else
-                   judgment_collection.find_one({"CaseNumber": doc_id}))
-            if not doc:
-                return
-            candidates[kind].setdefault(doc_id, {"doc": doc, "scores": []})["scores"].append(score)
+    candidates = {"law": {}, "judgment": {}}
 
-        async def process_section(emb):
-            res_law, res_jud = await asyncio.gather(
-                law_index.query(vector=emb.tolist(), top_k=1, include_metadata=True),
-                judgment_index.query(vector=emb.tolist(), top_k=1, include_metadata=True),
-            )
-            for m in res_law.get("matches", []): await add_candidate(m, "law")
-            for m in res_jud.get("matches", []): await add_candidate(m, "judgment")
+    async def add_candidate(match, kind):
+        meta   = match.get("metadata", {})
+        score  = match.get("score", 0)
+        doc_id = meta.get("IsraelLawID" if kind == "law" else "CaseNumber")
+        if not doc_id:
+            return
+        doc = (law_collection.find_one({"IsraelLawID": doc_id})
+               if kind == "law" else
+               judgment_collection.find_one({"CaseNumber": doc_id}))
+        if not doc:
+            return
+        candidates[kind].setdefault(doc_id, {"doc": doc, "scores": []})["scores"].append(score)
 
-        await asyncio.gather(*(process_section(e) for e in section_embs))
-
-        for m in law_index.query(vector=q_emb.tolist(), top_k=3, include_metadata=True).get("matches", []):
+    # ---------- Query לפי כל סעיף במסמך (ב-Thread) -----------------------
+    async def process_section(emb):
+        res_law, res_jud = await asyncio.gather(
+            asyncio.to_thread(
+                law_index.query,
+                vector=emb.tolist(), top_k=1, include_metadata=True
+            ),
+            asyncio.to_thread(
+                judgment_index.query,
+                vector=emb.tolist(), top_k=1, include_metadata=True
+            ),
+        )
+        for m in res_law.get("matches", []):
             await add_candidate(m, "law")
-        for m in judgment_index.query(vector=q_emb.tolist(), top_k=3, include_metadata=True).get("matches", []):
+        for m in res_jud.get("matches", []):
             await add_candidate(m, "judgment")
 
-        top_laws      = sorted(candidates["law"].values(),      key=lambda x: -np.mean(x["scores"]))[:3]
-        top_judgments = sorted(candidates["judgment"].values(), key=lambda x: -np.mean(x["scores"]))[:3]
-        return [d["doc"] for d in top_laws], [d["doc"] for d in top_judgments]
+    await asyncio.gather(*(process_section(e) for e in section_embs))
+
+    # ---------- Query גם לפי השאלה עצמה ----------------------------------
+    for m in law_index.query(vector=q_emb.tolist(), top_k=3, include_metadata=True).get("matches", []):
+        await add_candidate(m, "law")
+    for m in judgment_index.query(vector=q_emb.tolist(), top_k=3, include_metadata=True).get("matches", []):
+        await add_candidate(m, "judgment")
+
+    # ---------- בחירה: 3 חוקים + 3 פסקי-דין ------------------------------
+    top_laws = sorted(
+        candidates["law"].values(), key=lambda x: -np.mean(x["scores"])
+    )[:3]
+    top_judgments = sorted(
+        candidates["judgment"].values(), key=lambda x: -np.mean(x["scores"])
+    )[:3]
+
+    return [d["doc"] for d in top_laws], [d["doc"] for d in top_judgments]
 
     async def generate_answer(question: str):
         laws, judgments = await retrieve_sources(question)
@@ -271,7 +291,7 @@ def chat_assistant():
                 {"role": "system", "content": sys_prompt},
                 {"role": "user",   "content": question},
             ],
-            **temperature=0,**          # ↓ ↓ ↓  מנמיך יצירתיות כדי למנוע "המצאות"
+            **temperature=0,**          
             max_tokens=700,
         )
         return r.choices[0].message.content.strip()
@@ -289,7 +309,7 @@ def chat_assistant():
 
     # ---------- Unified input form ----------------------------------------
     with st.form("chat_form", clear_on_submit=True):
-        q = st.text_area("הקלד כאן שאלה משפטית (גם שאלות נוספות באותו שדה)", height=100)
+        q = st.text_area("הקלד כאן שאלה משפטית (גם שאלות נוספות)", height=100)
         if st.form_submit_button("שלח") and q.strip():
             asyncio.run(handle_question(q.strip()))
 
