@@ -304,3 +304,9 @@ def legal_finder_assistant():
                 f"</div>",
                 unsafe_allow_html=True  
             )
+
+
+if app_mode == "Chat Assistant":
+    chat_assistant()
+else:
+    legal_finder_assistant()
