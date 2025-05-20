@@ -278,4 +278,5 @@ def legal_finder_assistant():
             if not doc: continue
             name = doc.get("Name","No Name"); desc=doc.get("Description","N/A")
             date_lbl="DecisionDate" if kind=="Judgment" else "PublicationDate"
-            st.markdown(f"<div class='law-card'><div class='law-title'>{name} (ID: {doc_id})</div><div class='law-description'>{desc}</div><div class='law-meta'>{date_lbl}: {doc.get(date_lbl,'N/A')}</div></div>", unsafe
+            st.markdown(f"<div class='law-card'><div class='law-title'>{name} (ID: {doc_id})</div><div class='law-description'>{desc}</div><div class='law-meta'>{date_lbl}: {doc.get(date_lbl,'N/A')}</div></div>",unsafe_allow_html=True,
+    )
