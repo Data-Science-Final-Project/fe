@@ -249,14 +249,60 @@ def load_document_details(kind, doc_id):
     key  = "CaseNumber" if kind=="Judgment" else "IsraelLawID"
     return coll.find_one({key:doc_id})
 
-def get_explanation(scen, doc, kind):
-    name, desc = doc.get("Name",""), doc.get("Description","")
-    prompt = f"בהתבסס על הסצנריו:\n{scen}\n\nועל {('פסק הדין','החוק')[kind=='Law']} הבא:\n{name} – {desc}\n\nהסבר בקצרה מדוע רלוונטי ודרג 0‑10 (JSON)."
+
+def get_explanation(scenario, doc, kind):
+    name = doc.get("Name", "")
+    desc = doc.get("Description", "")
+
+    if kind == "Judgment":
+        prompt = f"""בהתבסס על הסצנריו הבא:
+{scenario}
+
+וכן על פרטי פסק הדין הבא:
+שם: {name}
+תיאור: {desc}
+
+אנא הסבר בצורה תמציתית ומקצועית מדוע פסק דין זה יכול לעזור למקרה זה,
+והערך אותו בסולם 0-10 (0 = לא עוזר כלל, 10 = מתאים במדויק).
+**אל תיתן לרוב המסמכים ציון 9 – היה מגוון!**
+החזר JSON בלבד, לדוגמה:
+{{
+  "advice": "הסבר מקצועי בעברית",
+  "score": 8
+}}
+אין להוסיף טקסט נוסף.
+"""
+    else:  # kind == "Law"
+        prompt = f"""בהתבסס על הסצנריו הבא:
+{scenario}
+
+וכן על פרטי החוק הבא:
+שם: {name}
+תיאור: {desc}
+
+אנא הסבר בצורה תמציתית ומקצועית מדוע חוק זה יכול לעזור למקרה זה,
+והערך אותו בסולם 0-10 (0 = לא קשור, 10 = מתאים כמו כפפה).
+**אל תיתן לרוב החוקים ציון 9 – היה מגוון!**
+החזר JSON בלבד, לדוגמה:
+{{
+  "advice": "הסבר תמציתי ומקצועי בעברית",
+  "score": 7
+}}
+אין להוסיף טקסט נוסף.
+"""
+
     try:
-        r = client_sync_openai.chat.completions.create(model="gpt-3.5-turbo",messages=[{"role":"user","content":prompt}],temperature=0.7)
-        return json.loads(r.choices[0].message.content.strip())
+        response = client_sync_openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+        )
+        return json.loads(response.choices[0].message.content.strip())
     except Exception as e:
-        return {"advice":f"Error: {e}","score":"N/A"}
+        st.error(f"Error from GPT: {e}")
+        return {"advice": "לא ניתן לקבל הסבר בשלב זה.", "score": "N/A"}
+
+
 
 def legal_finder_assistant():
     st.title("Legal Finder Assistant")
@@ -268,7 +314,7 @@ def legal_finder_assistant():
         # --- Pinecone similarity search ------------------------------------
         q_emb  = model.encode([scen], normalize_embeddings=True)[0]
         index  = judgment_index if kind == "Judgment" else law_index
-        id_key = "CaseNumber"    if kind == "Judgment" else "IsraelLawID"
+        id_key = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
 
         res     = index.query(vector=q_emb.tolist(), top_k=5, include_metadata=True)
         matches = res.get("matches", [])
@@ -309,7 +355,8 @@ def legal_finder_assistant():
 
             # --- explanation + score  -------------------------------------
             with st.spinner("Getting explanation..."):
-                result  = get_explanation(scen, doc, kind)   # ← GPT-3.5-turbo
+                result = get_explanation(scen, doc, kind)
+
             advice = result.get("advice", "")
             score  = result.get("score", "N/A")
 
