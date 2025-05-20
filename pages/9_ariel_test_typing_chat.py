@@ -311,7 +311,7 @@ def legal_finder_assistant():
     scen = st.text_area("Describe your scenario")
 
     if st.button("Find Suitable Results") and scen:
-        # --- Pinecone similarity search ------------------------------------
+        # ---------- Pinecone similarity search ---------------------------------------
         q_emb  = model.encode([scen], normalize_embeddings=True)[0]
         index  = judgment_index if kind == "Judgment" else law_index
         id_key = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
@@ -322,7 +322,7 @@ def legal_finder_assistant():
             st.info("No matches found.")
             return
 
-        # --- loop over matches ---------------------------------------------
+        # ---------- loop over matches ----------------------------------------
         for m in matches:
             doc_id = m.get("metadata", {}).get(id_key)
             if not doc_id:
@@ -335,14 +335,11 @@ def legal_finder_assistant():
             desc     = doc.get("Description", "N/A")
             date_lbl = "DecisionDate" if kind == "Judgment" else "PublicationDate"
 
-            # (optional) procedure type for judgments
-            extra_label = "ProcedureType" if kind == "Judgment" else None
-            extra_html  = (
-                f"<div class='law-meta'>Procedure Type: {doc.get(extra_label, 'N/A')}</div>"
-                if extra_label else ""
+            extra_html = (
+                f"<div class='law-meta'>Procedure Type: {doc.get('ProcedureType','N/A')}</div>"
+                if kind == "Judgment" else ""
             )
 
-            # --- card ------------------------------------------------------
             st.markdown(
                 f"<div class='law-card'>"
                 f"<div class='law-title'>{name} (ID: {doc_id})</div>"
@@ -353,25 +350,20 @@ def legal_finder_assistant():
                 unsafe_allow_html=True
             )
 
-            # --- explanation + score  -------------------------------------
+            # ---------- GPT Advise (Hidden Score) -----------------------------
             with st.spinner("Getting explanation..."):
                 result = get_explanation(scen, doc, kind)
 
             advice = result.get("advice", "")
-            score  = result.get("score", "N/A")
+            # score  = result.get("score", "N/A") 
 
             st.markdown(
-                f"""
-                <div style='display:flex;justify-content:space-between;align-items:center;'>
-                    <span style='color:red;'>עצת האתר: {advice}</span>
-                    <span style='font-size:24px;font-weight:bold;color:red;'>{score}/10</span>
-                </div>
-                """,
+                f"<span style='color:red;'>עצת האתר: {advice}</span>",
                 unsafe_allow_html=True
             )
 
-            # --- full JSON toggle ------------------------------------------
-            if st.button(f"View Full Details for {doc_id}", key=f"details_{doc_id}"):
+            # ---------- full JSON toggle -------------------------------
+            with st.expander(f"View Full Details for {doc_id}"):
                 st.json(doc)
 
 
