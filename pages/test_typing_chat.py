@@ -113,7 +113,7 @@ async def pinecone_top_matches(embeddings, index, top_k=1):
 def chat_assistant():
     st.markdown('<div class="chat-header">💬 Ask Mini Lawyer</div>', unsafe_allow_html=True)
 
-    # -------- Session init -------------------------------------------------
+    # ---------- Session init ---------------------------------------------
     if "current_chat_id" not in st.session_state:
         cid = get_localstorage_value("MiniLawyerChatId") or str(uuid.uuid4())
         set_localstorage_value("MiniLawyerChatId", cid)
@@ -125,7 +125,7 @@ def chat_assistant():
         st.session_state["messages"] = convo.get("messages", []) if convo else []
     st.session_state.setdefault("user_name", None)
 
-    # -------- Name prompt --------------------------------------------------
+    # ---------- Name prompt ---------------------------------------------
     if not st.session_state["user_name"]:
         with st.form("user_name_form"):
             n = st.text_input("הכנס שם להתחלת שיחה:")
@@ -140,52 +140,58 @@ def chat_assistant():
                 st.rerun()
         return
 
-    # -------- Display chat -------------------------------------------------
+    # ---------- Chat history display ------------------------------------
     with st.container():
         st.markdown('<div class="chat-container">', unsafe_allow_html=True)
         display_messages()
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # -------- Upload document ---------------------------------------------
+    # ---------- File upload ---------------------------------------------
     uploaded = st.file_uploader("📄 העלה מסמך משפטי", type=["pdf", "docx"])
     if uploaded:
         txt = read_pdf(uploaded) if uploaded.type == "application/pdf" else read_docx(uploaded)
         st.session_state["uploaded_doc_text"] = txt
         st.success("המסמך נטען בהצלחה!")
 
-        prompt_cls = (
-            "סווג את המסמך הבא: חוזה, מכתב, תקנון, תביעה, פסק דין, אחר.\n---\n"
-            + txt[:1200]
-            + "\n---"
+        # ---- STRICT classification (Hebrew, exact label) ----------------
+        cls_system = (
+            "אתה מסווג מסמכים משפטיים. החזר *בדיוק* אחת מהקטגוריות הבאות, ללא תווים נוספים:\n"
+            "חוזה, מכתב, תקנון, תביעה, פסק דין, אחר"
         )
+        user_excerpt = txt[:1200]
         resp = asyncio.run(
             client_async_openai.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt_cls}],
+                messages=[
+                    {"role": "system", "content": cls_system},
+                    {"role": "user", "content": user_excerpt},
+                ],
                 temperature=0,
-                max_tokens=12,
+                max_tokens=2,
             )
         )
         st.session_state["doc_type"] = resp.choices[0].message.content.strip()
         st.success(f"📄 סוג המסמך: {st.session_state['doc_type']}")
 
-    # -------- Summarise document ------------------------------------------
+    # ---------- Summarise button ----------------------------------------
     if "uploaded_doc_text" in st.session_state and st.button("📋 סכם את המסמך"):
         with st.spinner("GPT מסכם את המסמך..."):
             doc_type = st.session_state.get("doc_type", "מסמך")
             sum_prompt = (
-                f"אתה עורך-דין מומחה. סכּם את {doc_type} בשלושה חלקים:\n"
-                "1. Executive Summary (≤120 מילים)\n"
-                "2. נקודות עיקריות (בולטים)\n"
-                "3. השלכות והמלצות\n---\n"
+                f"סכם את {doc_type} הבא בעברית בלבד בשלושה חלקים:\n"
+                "1. תקציר מנהלים (עד 120 מילים)\n"
+                "2. נקודות עיקריות (רשימת בולטים)\n"
+                "3. השלכות והמלצות מעשיות לקורא\n"
+                "השתמש בעברית בלבד, ללא מילים באנגלית.\n"
+                "—\n"
                 + st.session_state["uploaded_doc_text"]
-                + "\n---"
+                + "\n—"
             )
             r = asyncio.run(
                 client_async_openai.chat.completions.create(
                     model="gpt-4",
                     messages=[{"role": "user", "content": sum_prompt}],
-                    temperature=0.3,
+                    temperature=0.2,
                     max_tokens=800,
                 )
             )
@@ -195,13 +201,14 @@ def chat_assistant():
         st.markdown("### סיכום המסמך:")
         st.info(st.session_state["doc_summary"])
 
-    # -------- Retrieval helpers (unchanged) -------------------------------
+    # ---------- Retrieval / answer helpers (כמו קודם) -------------------
     async def retrieve_sources(question: str):
         q_emb = model.encode([question], normalize_embeddings=True)[0]
-        section_embs = [
-            model.encode([sec], normalize_embeddings=True)[0]
-            for sec in chunk_text(st.session_state["uploaded_doc_text"])
-        ] if "uploaded_doc_text" in st.session_state else []
+        section_embs = (
+            [model.encode([sec], normalize_embeddings=True)[0] for sec in chunk_text(st.session_state["uploaded_doc_text"])]
+            if "uploaded_doc_text" in st.session_state
+            else []
+        )
 
         candidates = {"law": {}, "judgment": {}}
 
@@ -232,6 +239,7 @@ def chat_assistant():
 
         await asyncio.gather(*(process_section(e) for e in section_embs))
 
+        # also query by the question itself
         for m in law_index.query(vector=q_emb.tolist(), top_k=3, include_metadata=True).get("matches", []):
             await add_candidate(m, "law")
         for m in judgment_index.query(vector=q_emb.tolist(), top_k=3, include_metadata=True).get("matches", []):
@@ -259,7 +267,7 @@ def chat_assistant():
         )
         return r.choices[0].message.content.strip()
 
-    async def handle_question(q, follow=False):
+    async def handle_question(q):
         ans = await generate_answer(q)
         add_message("user", q)
         add_message("assistant", ans)
@@ -270,21 +278,19 @@ def chat_assistant():
         )
         st.rerun()
 
-    # -------- Unified input form (first & follow-up) ----------------------
+    # ---------- Unified input form --------------------------------------
     with st.form("chat_form", clear_on_submit=True):
-        q = st.text_area(
-            "הקלד כאן שאלה משפטית (ולאחר מכן שאלות נוספות באותו שדה)",
-            height=100,
-        )
+        q = st.text_area("הקלד כאן שאלה משפטית (גם שאלות נוספות באותו שדה)", height=100)
         if st.form_submit_button("שלח") and q.strip():
-            asyncio.run(handle_question(q.strip(), follow=bool(st.session_state["messages"])))
+            asyncio.run(handle_question(q.strip()))
 
-    # -------- Clear conversation -----------------------------------------
+    # ---------- Clear conversation --------------------------------------
     if st.button("🗑 נקה שיחה"):
         conversation_coll.delete_one({"local_storage_id": chat_id})
         st_js("localStorage.clear();")
         st.session_state.clear()
         st.rerun()
+
 
 
 # ------------------------------------
