@@ -238,33 +238,36 @@ def chat_assistant():
         return [d["doc"] for d in top_laws], [d["doc"] for d in top_judgments]
 
     async def generate_answer(question: str):
-        laws, judgments = await retrieve_sources(question)
-        if not laws and not judgments:
-            return "לא נמצאו חוקים או פסקי-דין רלוונטיים במסד הנתונים."
+    laws, judgments = await retrieve_sources(question)
+    doc_text = st.session_state.get("uploaded_doc_text", "")[:1500]
 
-        law_snip = "\n\n".join(d.get("Description", "")[:800] for d in laws)
-        jud_snip = "\n\n".join(d.get("Description", "")[:800] for d in judgments)
+    if not laws and not judgments and not doc_text:
+        return "לא נמצאו חוקים, פסקי-דין או מסמך רלוונטי למתן תשובה מוסמכת."
 
-        sys_prompt = (
-            "אתה עורך-דין ישראלי. ענה בעברית בלבד ובצורה מנומקת. "
-            "הסתמך אך ורק על החומר המצוטט. "
-            "אם אינך בטוח – כתוב 'אין לי מידע מוסמך לענות'. "
-            "אסור להמציא או לשער. על כל קביעה ציין מקור ברור "
-            "(שם חוק/פס״ד ומספר סעיף/עמוד).\n\n"
-            "--- חוקים ---\n" + law_snip +
-            "\n\n--- פסקי דין ---\n" + jud_snip + "\n\n"
-        )
+    law_snip = "\n\n".join(d.get("Description", "")[:800] for d in laws)
+    jud_snip = "\n\n".join(d.get("Description", "")[:800] for d in judgments)
 
-        r = await client_async_openai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": sys_prompt},
-                {"role": "user", "content": question},
-            ],
-            temperature=0,
-            max_tokens=700,
-        )
-        return r.choices[0].message.content.strip()
+    sys_prompt = (
+        "אתה עורך-דין ישראלי. עליך לנסח תשובה משפטית מקצועית ומנומקת בעברית בלבד.\n"
+        "חובה להסתמך אך ורק על החומר המצוטט מטה: המסמך שהועלה, חוקים ופסקי-דין. "
+        "אין להמציא מידע, ואין לשער.\n"
+        "אם אין מספיק מידע – כתוב 'אין לי מידע מוסמך לענות'.\n"
+        "יש לציין מקור ברור לכל טענה (שם חוק / פס״ד + מספר סעיף / עמוד).\n\n"
+        "--- חלקים רלוונטיים מהמסמך שהועלה ---\n" + doc_text + 
+        "\n\n--- חוקים ---\n" + law_snip +
+        "\n\n--- פסקי דין ---\n" + jud_snip + "\n\n"
+    )
+
+    r = await client_async_openai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": sys_prompt},
+            {"role": "user", "content": question},
+        ],
+        temperature=0,
+        max_tokens=700,
+    )
+    return r.choices[0].message.content.strip()
 
     async def handle_question(q):
         ans = await generate_answer(q)
