@@ -59,7 +59,6 @@ app_mode = st.sidebar.selectbox("Choose module", ["Chat Assistant", "Legal Finde
 # ------------------------------------------------------------
 # Utility
 # ------------------------------------------------------------
-
 def get_localstorage_value(key):
     return st_js_blocking(f"return localStorage.getItem('{key}');", key="get_"+key)
 
@@ -81,17 +80,19 @@ def add_message(role, content):
 def display_messages():
     for m in st.session_state.get("messages", []):
         cls = "user-message" if m["role"]=="user" else "bot-message"
-        st.markdown(f"<div class='{cls}'>{m['content']}<div class='timestamp'>{m['timestamp']}</div></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='{cls}'>{m['content']}<div class='timestamp'>{m['timestamp']}</div></div>",
+            unsafe_allow_html=True
+        )
 
 # ------------------------------------------------------------
 # Chunk helpers
 # ------------------------------------------------------------
-
 def chunk_text(txt, max_len=450):
     sentences = re.split(r'(?:\.|\?|!)\s+', txt)
     chunks, cur = [], ""
     for s in sentences:
-        if len(cur)+len(s) > max_len and cur:
+        if len(cur) + len(s) > max_len and cur:
             chunks.append(cur.strip())
             cur = s
         else:
@@ -107,10 +108,10 @@ async def pinecone_top_matches(embeddings, index, top_k=1):
 # ------------------------------------------------------------
 # Chat Assistant
 # ------------------------------------------------------------
-
 def chat_assistant():
     st.markdown('<div class="chat-header">💬 Ask Mini Lawyer</div>', unsafe_allow_html=True)
 
+    # ---------- session & history ----------
     if "current_chat_id" not in st.session_state:
         cid = get_localstorage_value("MiniLawyerChatId") or str(uuid.uuid4())
         set_localstorage_value("MiniLawyerChatId", cid)
@@ -122,6 +123,7 @@ def chat_assistant():
         st.session_state["messages"] = convo.get("messages", []) if convo else []
     st.session_state.setdefault("user_name", None)
 
+    # ---------- user name ----------
     if not st.session_state["user_name"]:
         with st.form("user_name_form"):
             n = st.text_input("הכנס שם להתחלת שיחה:")
@@ -136,14 +138,17 @@ def chat_assistant():
                 st.rerun()
         return
 
+    # ---------- chat window ----------
     with st.container():
         st.markdown('<div class="chat-container">', unsafe_allow_html=True)
         display_messages()
         st.markdown("</div>", unsafe_allow_html=True)
 
+    # ---------- helper to strip english ----------
     def strip_english_lines(text: str) -> str:
         return "\n".join([ln for ln in text.splitlines() if re.search(r"[א-ת]", ln)])
 
+    # ---------- file upload ----------
     uploaded = st.file_uploader("📄 העלה מסמך משפטי", type=["pdf", "docx"])
     if uploaded:
         raw_txt = read_pdf(uploaded) if uploaded.type == "application/pdf" else read_docx(uploaded)
@@ -163,12 +168,13 @@ def chat_assistant():
                     {"role": "user", "content": clean_txt[:1500]},
                 ],
                 temperature=0,
-                max_tokens=2,
+                max_tokens=5,
             )
         )
         st.session_state["doc_type"] = resp.choices[0].message.content.strip()
         st.success(f"📄 סוג המסמך שזוהה: {st.session_state['doc_type']}")
 
+    # ---------- summarise ----------
     if "uploaded_doc_text" in st.session_state and st.button("📋 סכם את המסמך"):
         with st.spinner("GPT מסכם את המסמך..."):
             doc_type = st.session_state.get("doc_type", "מסמך")
@@ -195,6 +201,7 @@ def chat_assistant():
         st.markdown("### סיכום המסמך:")
         st.info(st.session_state["doc_summary"])
 
+    # ---------- retrieval ----------
     async def retrieve_sources(question: str):
         q_emb = model.encode([question], normalize_embeddings=True)[0]
         section_embs = (
@@ -237,40 +244,40 @@ def chat_assistant():
 
         return [d["doc"] for d in top_laws], [d["doc"] for d in top_judgments]
 
-   async def generate_answer(question: str):
-    laws, judgments = await retrieve_sources(question)
-    doc_text = st.session_state.get("uploaded_doc_text", "")[:1500]
+    # ---------- answer ----------
+    async def generate_answer(question: str):
+        laws, judgments = await retrieve_sources(question)
+        doc_text = st.session_state.get("uploaded_doc_text", "")[:1500]
 
-    if not laws and not judgments and not doc_text:
-        return "לא נמצאו חוקים, פסקי-דין או מסמך רלוונטי למתן תשובה מוסמכת."
+        if not laws and not judgments and not doc_text:
+            return "לא נמצאו חוקים, פסקי-דין או מסמך רלוונטי למתן תשובה מוסמכת."
 
-    law_snip = "\n\n".join(d.get("Description", "")[:800] for d in laws)
-    jud_snip = "\n\n".join(d.get("Description", "")[:800] for d in judgments)
+        law_snip = "\n\n".join(d.get("Description", "")[:800] for d in laws)
+        jud_snip = "\n\n".join(d.get("Description", "")[:800] for d in judgments)
 
-    sys_prompt = (
-        "אתה עורך-דין ישראלי. עליך לנסח תשובה משפטית מקצועית ומנומקת בעברית בלבד.\n"
-        "חובה להסתמך אך ורק על החומר המצוטט מטה: המסמך שהועלה, חוקים ופסקי-דין. "
-        "אין להמציא מידע, ואין לשער.\n"
-        "אם אין מספיק מידע – כתוב 'אין לי מידע מוסמך לענות'.\n"
-        "יש לציין מקור ברור לכל טענה (שם חוק / פס״ד + מספר סעיף / עמוד).\n\n"
-        "--- חלקים רלוונטיים מהמסמך שהועלה ---\n" + doc_text +
-        "\n\n--- חוקים ---\n" + law_snip +
-        "\n\n--- פסקי דין ---\n" + jud_snip + "\n\n"
-    )
+        sys_prompt = (
+            "אתה עורך-דין ישראלי. עליך לנסח תשובה משפטית מקצועית ומנומקת בעברית בלבד.\n"
+            "חובה להסתמך אך ורק על החומר המצוטט מטה: המסמך שהועלה, חוקים ופסקי-דין. "
+            "אין להמציא מידע, ואין לשער.\n"
+            "אם אין מספיק מידע – כתוב 'אין לי מידע מוסמך לענות'.\n"
+            "יש לציין מקור ברור לכל טענה (שם חוק / פס״ד + מספר סעיף / עמוד).\n\n"
+            "--- חלקים רלוונטיים מהמסמך שהועלה ---\n" + doc_text +
+            "\n\n--- חוקים ---\n" + law_snip +
+            "\n\n--- פסקי דין ---\n" + jud_snip + "\n\n"
+        )
 
-    r = await client_async_openai.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": question},
-        ],
-        temperature=0,
-        max_tokens=700,
-    )
-    return r.choices[0].message.content.strip()
+        r = await client_async_openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": question},
+            ],
+            temperature=0,
+            max_tokens=700,
+        )
+        return r.choices[0].message.content.strip()
 
-
-
+    # ---------- handle question ----------
     async def handle_question(q):
         ans = await generate_answer(q)
         add_message("user", q)
@@ -282,29 +289,26 @@ def chat_assistant():
         )
         st.rerun()
 
+    # ---------- chat input ----------
     with st.form("chat_form", clear_on_submit=True):
         q = st.text_area("הקלד כאן שאלה משפטית (גם שאלות נוספות)", height=100)
         if st.form_submit_button("שלח") and q.strip():
             asyncio.run(handle_question(q.strip()))
 
+    # ---------- clear ----------
     if st.button("🗑 נקה שיחה"):
         conversation_coll.delete_one({"local_storage_id": chat_id})
         st_js("localStorage.clear();")
         st.session_state.clear()
         st.rerun()
 
-
-
-
-
 # ------------------------------------
 # Legal Finder Assistant
 # ------------------------------------
 def load_document_details(kind, doc_id):
-    coll = judgment_collection if kind=="Judgment" else law_collection
-    key  = "CaseNumber" if kind=="Judgment" else "IsraelLawID"
-    return coll.find_one({key:doc_id})
-
+    coll = judgment_collection if kind == "Judgment" else law_collection
+    key  = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
+    return coll.find_one({key: doc_id})
 
 def get_explanation(scenario, doc, kind):
     name = doc.get("Name", "")
@@ -358,8 +362,6 @@ def get_explanation(scenario, doc, kind):
         st.error(f"Error from GPT: {e}")
         return {"advice": "לא ניתן לקבל הסבר בשלב זה.", "score": "N/A"}
 
-
-
 def legal_finder_assistant():
     st.title("Legal Finder Assistant")
 
@@ -411,7 +413,7 @@ def legal_finder_assistant():
                 result = get_explanation(scen, doc, kind)
 
             advice = result.get("advice", "")
-            # score  = result.get("score", "N/A") 
+            # score  = result.get("score", "N/A")
 
             st.markdown(
                 f"<span style='color:red;'>עצת האתר: {advice}</span>",
@@ -422,8 +424,9 @@ def legal_finder_assistant():
             with st.expander(f"View Full Details for {doc_id}"):
                 st.json(doc)
 
-
-
+# ------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------
 if app_mode == "Chat Assistant":
     chat_assistant()
 else:
