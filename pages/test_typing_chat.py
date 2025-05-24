@@ -206,7 +206,7 @@ def chat_assistant():
         st.info(st.session_state["doc_summary"])
 
     # ---------- Retrieval helpers ------------------------------------------
-   async def retrieve_sources(question: str):
+       async def retrieve_sources(question: str):
     # ---------- Embedding לשאלה -------------------------------------------
     q_emb = model.encode([question], normalize_embeddings=True)[0]
 
