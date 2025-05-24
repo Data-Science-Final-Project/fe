@@ -237,7 +237,7 @@ def chat_assistant():
 
         return [d["doc"] for d in top_laws], [d["doc"] for d in top_judgments]
 
-    async def generate_answer(question: str):
+   async def generate_answer(question: str):
     laws, judgments = await retrieve_sources(question)
     doc_text = st.session_state.get("uploaded_doc_text", "")[:1500]
 
@@ -268,6 +268,8 @@ def chat_assistant():
         max_tokens=700,
     )
     return r.choices[0].message.content.strip()
+
+
 
     async def handle_question(q):
         ans = await generate_answer(q)
