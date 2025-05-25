@@ -215,7 +215,12 @@ async def retrieve(q, doc):
             cand[kind].setdefault(_id, {"doc": d, "scores": []})["scores"].append(score)
 
     async def query(idx, vec):
-        return idx.query(vector=vec, top_k=5, include_metadata=True).get("matches", [])
+        vec_list = vec.tolist() if isinstance(vec, np.ndarray) else vec
+        return idx.query(
+            vector=vec_list,
+            top_k=5,
+            include_metadata=True
+        ).get("matches", [])
 
     async def scan(vec):
         for m in await query(law_index, vec):
