@@ -107,31 +107,63 @@ CATEGORIES = {
     "מכתב_פיטורין": {
         "regex": [
             r"פיטור(?:ין|ים)",
-            r"הפסקת\s+עבודת(?:ך|ו|ה)",
+            r"הפסק[ת]?[\s\-]+עבוד[תךוה]",
             r"הודעת?\s+פיטור(?:ין|ים|י)",
             r"סיום\s+ה?עסקת(?:ך|ו|ה)",
             r"termination\s+(?:of\s+)?employment"
         ]
     },
- "חוזה_עבודה":  {"regex":[r"הסכם\s+עבודה|employment agreement"]},
- "תקנון":        {"regex":[r"תקנון|by.?law|policy"]},
- "כתב_תביעה":    {"regex":[r"כתב\s+תביעה|התובע|הנתבע"]},
- "פסק_דין":      {"regex":[r"פסק[-\s]?דין|בית.?משפט"]},
- "מכתב_אחר":     {"regex":[]}
+    "חוזה_עבודה": {
+        "regex": [
+            r"הסכם\s+עבודה",
+            r"employment\s+agreement"
+        ]
+    },
+    "תקנון": {
+        "regex": [
+            r"תקנון",
+            r"by.?law",
+            r"policy"
+        ]
+    },
+    "כתב_תביעה": {
+        "regex": [
+            r"כתב\s+תביעה",
+            r"\bהתובע\b",
+            r"\bהנתבע\b"
+        ]
+    },
+    "פסק_דין": {
+        "regex": [
+            r"פסק[-\s]?דין",
+            r"בית\s+משפט"
+        ]
+    },
+    "מכתב_אחר": {"regex": []}
 }
-CLS_SYS="אתה מסווג מסמכים משפטיים. החזר אחת בלבד: "+", ".join(CATEGORIES)
 
-def classify_doc(txt:str)->str:
-    for lab,d in CATEGORIES.items():
-        if any(re.search(p,txt,re.I) for p in d["regex"]): return lab
+CLS_SYS = "אתה מסווג מסמכים משפטיים. החזר תווית אחת בלבד: " + ", ".join(CATEGORIES.keys())
+
+def classify_doc(txt: str) -> str:
+    for label, cfg in CATEGORIES.items():
+        if any(re.search(pat, txt, re.IGNORECASE) for pat in cfg["regex"]):
+            return label
+    sample = txt[:1500]
     try:
-        r=client_sync_openai.chat.completions.create(
+        resp = client_sync_openai.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[{"role":"system","content":CLS_SYS},{"role":"user","content":txt[:1500]}],
-            temperature=0,max_tokens=10)
-        lab=r.choices[0].message.content.strip()
-    except: lab="מכתב_אחר"
-    return lab if lab in CATEGORIES else "מכתב_אחר"
+            messages=[
+                {"role": "system", "content": CLS_SYS},
+                {"role": "user",   "content": sample}
+            ],
+            temperature=0,
+            max_tokens=10
+        )
+        label = resp.choices[0].message.content.strip()
+        return label if label in CATEGORIES else "מכתב_אחר"
+    except Exception:
+        return "מכתב_אחר"
+
 
 # ────────────── prompts ──────────────
 H=lambda s: s+"  **ענה בעברית מלאה וללא מילים באנגלית. ציין מקור ממוספר (חוק או פס״ד) אחרי כל קביעה.**"
