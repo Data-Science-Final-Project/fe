@@ -254,25 +254,24 @@ def chat_assistant():
         st.success(f"סוג המסמך: {st.session_state.doctype}")
 
     # summary
-    # ────────── סיכום ──────────
-if hasattr(st.session_state, "doc") and st.button("📋 סיכום"):
-    with st.spinner("סיכום..."):
-        prompt = (
-            tmpl(st.session_state.doctype, "summary") +
-            "\n\nכתוב 4-6 Bullet-ים קצרים (עד 30 מילים כל אחד):\n" +
-            st.session_state.doc[:2000]
-        )
-        r = asyncio.run(
-            client_async_openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=350
+    if hasattr(st.session_state, "doc") and st.button("📋 סיכום"):
+        with st.spinner("סיכום..."):
+            prompt = (
+                tmpl(st.session_state.doctype, "summary") +
+                "\n\nכתוב 4-6 Bullet-ים קצרים (עד 30 מילים כל אחד):\n" +
+                st.session_state.doc[:2000]
             )
-        )
-        st.session_state.summary = ensure_he(
-            r.choices[0].message.content.strip().replace("•", "–")
-        )
+            r = asyncio.run(
+                client_async_openai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0,
+                    max_tokens=350
+                )
+            )
+            st.session_state.summary = ensure_he(
+                r.choices[0].message.content.strip().replace("•", "–")
+            )
 
               
     # answer helpers
