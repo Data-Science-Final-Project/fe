@@ -52,131 +52,55 @@ st.markdown("""
 app_mode = st.sidebar.selectbox("Choose module", ["Chat Assistant", "Legal Finder"])
 
 # ─────────────────── helpers ────────────────────
-"""
-💡  Helper utilities for the Streamlit-based legal assistant
-    --------------------------------------------------------
-    • Local-storage helpers (`ls_get`, `ls_set`)
-    • RTL / Hebrew text normalisation (`rtl_norm`)
-    • File readers for PDF / DOCX (`read_pdf`, `read_docx`)
-    • Chat-UI helpers (`add_msg`, `show_msgs`)
-    • Text utilities (`chunk_text`, `ensure_he`)
-"""
-
-# ── Imports ────────────────────────────────────────────────
-import re
-from datetime import datetime
-
-import streamlit as st
-from streamlit_js import st_js, st_js_blocking
-from bidi.algorithm import get_display    # pip install python-bidi
-import fitz                               # pip install pymupdf
-import docx                               # pip install python-docx
-
-# NOTE: make sure you have `client_sync_openai = OpenAI(api_key=...)`
-#       defined *before* calling `ensure_he`.
-
-# ── Local-storage helpers (runs in browser via st_js) ──────
+# localStorage
 def ls_get(key: str) -> str | None:
-    """
-    Retrieve a value from `localStorage` in the user's browser.
-    """
     with st.container():
         st.markdown("<div style='display:none'>", unsafe_allow_html=True)
-        value = st_js_blocking(
-            f"return localStorage.getItem('{key}');",
-            key=f"ls_{key}",
-        )
+        value = st_js_blocking(f"return localStorage.getItem('{key}');", key=f"ls_{key}")
         st.markdown("</div>", unsafe_allow_html=True)
     return value
 
-
 def ls_set(key: str, value: str) -> None:
-    """
-    Persist a value to `localStorage` in the user's browser.
-    """
     st_js(f"localStorage.setItem('{key}', '{value}');")
 
-
-# ── RTL / Hebrew utilities ─────────────────────────────────
+# RTL text normalization
 heb_pattern = re.compile(r"[א-ת]")
-SALUT       = re.compile(r"\b(לכבוד|מר|מר\.?|גב'?|גברת|ד\"ר|ד\"ר\.?)\b")
-
+SALUT = re.compile(r"\b(לכבוד|מר|מר\.?|גב'?|גברת|ד\"ר|ד\"ר\.?)\b")
 
 def rtl_norm(text: str) -> str:
-    """
-    Normalise Right-to-Left Hebrew strings for *display only*.
-    DO NOT feed the output to an embedding model.
-    """
     if not heb_pattern.search(text):
         return text
-
     try:
-        # Converts visual RTL to logical order where necessary
         text = get_display(text)
     except Exception:
-        # Fallback: reverse each RTL word individually
-        text = " ".join(
-            word[::-1] if heb_pattern.search(word) else word
-            for word in text.split()
-        )
-
-    # Remove salutations and excessive whitespace
+        text = " ".join(word[::-1] if heb_pattern.search(word) else word for word in text.split())
     text = SALUT.sub("", text)
-    text = re.sub(r"\s{2,}", " ", text).strip()
-    return text
+    return re.sub(r"\s{2,}", " ", text).strip()
 
+# File readers
+read_pdf = lambda f: "".join(rtl_norm(p.get_text()) for p in fitz.open(stream=f.read(), filetype="pdf"))
+read_docx = lambda f: "\n".join(rtl_norm(p.text) for p in docx.Document(f).paragraphs if p.text.strip())
 
-# ── File readers (PDF / DOCX) ──────────────────────────────
-read_pdf = (
-    lambda file_like: "".join(
-        rtl_norm(page.get_text())
-        for page in fitz.open(stream=file_like.read(), filetype="pdf")
-    )
-)
-
-read_docx = (
-    lambda file_like: "\n".join(
-        rtl_norm(par.text)
-        for par in docx.Document(file_like).paragraphs
-        if par.text.strip()
-    )
-)
-
-
-# ── Chat-UI helpers ────────────────────────────────────────
+# Chat UI
 def add_msg(role: str, text: str) -> None:
-    """
-    Append a message to `st.session_state["messages"]`.
-    """
-    st.session_state.setdefault("messages", []).append(
-        {
-            "role": role,
-            "content": text,
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
-        }
-    )
-
+    st.session_state.setdefault("messages", []).append({
+        "role": role,
+        "content": text,
+        "timestamp": datetime.now().strftime("%H:%M:%S")
+    })
 
 def show_msgs() -> None:
-    """
-    Render the chat history with simple CSS styling.
-    """
     for msg in st.session_state.get("messages", []):
         css_class = "user-message" if msg["role"] == "user" else "bot-message"
         st.markdown(
-            f"<div class='{css_class}'>{msg['content']}"
-            f"<div class='timestamp'>{msg['timestamp']}</div></div>",
+            f"<div class='{css_class}'>{msg['content']}<div class='timestamp'>{msg['timestamp']}</div></div>",
             unsafe_allow_html=True,
         )
 
-
-# ── Text helpers ───────────────────────────────────────────
+# Text processing
 def chunk_text(text: str, max_len: int = 450) -> list[str]:
-    """
-    Split long text into sentence-level chunks of approximately `max_len`
-    characters (up to 20 chunks).
-    """
-    # Split on punctuation followed by whitespace
+    if not isinstance(text, str):
+        text = str(text)
     sentences = re.split(r"(?:\.|\?|!)\s+", text)
     chunks, current = [], ""
     for sentence in sentences:
@@ -189,20 +113,12 @@ def chunk_text(text: str, max_len: int = 450) -> list[str]:
         chunks.append(current.strip())
     return chunks[:20]
 
-
 contains_en = lambda s: bool(re.search(r"[A-Za-z]", s))
 
-
 def ensure_he(text: str) -> str:
-    """
-    If the input is mostly English, translate it to Hebrew via GPT-3.5-Turbo.
-    Otherwise, return the text unchanged.
-    Requires a global `client_sync_openai` instance.
-    """
     english_word_count = sum(contains_en(word) for word in text.split())
     if english_word_count <= 3:
         return text
-
     response = client_sync_openai.chat.completions.create(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "תרגם לעברית מלאה:\n" + text}],
@@ -210,6 +126,7 @@ def ensure_he(text: str) -> str:
         max_tokens=len(text) // 2,
     )
     return response.choices[0].message.content.strip()
+
 
 
 # ───────────── classification ─────────────
@@ -242,15 +159,25 @@ CLS_SYS = (
 )
 
 def classify_doc(txt: str) -> str:
-    chunks = chunk_text(txt, L=500)[:3] or [txt[:1500]]
+    # Ensure txt is a string to prevent crashes (e.g., from None or file objects)
+    if not isinstance(txt, str):
+        try:
+            txt = txt.decode("utf-8")
+        except Exception:
+            txt = str(txt)
+
+    chunks = chunk_text(txt, max_len=500)[:3] or [txt[:1500]]
     msgs = [{"role": "system", "content": CLS_SYS}]
+    
     for eg, lbl in CLS_EXAMPLES:
         msgs += [
             {"role": "user", "content": eg},
             {"role": "assistant", "content": json.dumps({"label": lbl, "confidence": 95})}
         ]
+    
     for c in chunks:
         msgs.append({"role": "user", "content": c})
+
     try:
         r = client_sync_openai.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -262,6 +189,7 @@ def classify_doc(txt: str) -> str:
         return j["label"] if j.get("label") in DOC_LABELS else "מסמך_אחר"
     except Exception:
         return "מסמך_אחר"
+
 
 # ────────────── prompts ──────────────
 H = lambda s: s + "  **ענה בעברית מלאה וללא מילים באנגלית. ציין מקור ממוספר (חוק או פס״ד) אחרי כל קביעה.**"
