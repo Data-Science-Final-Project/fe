@@ -1,433 +1,344 @@
-# ───────────────────── imports ─────────────────────
-import os, re, json, uuid, asyncio
+import os, sys, json, uuid, asyncio, re
 from datetime import datetime
 
 import streamlit as st
 import torch, fitz, docx, numpy as np
-from bidi.algorithm import get_display
-from dotenv import load_dotenv
+from sklearn.metrics.pairwise import cosine_similarity
 from openai import AsyncOpenAI, OpenAI
+from dotenv import load_dotenv
 from streamlit_js import st_js, st_js_blocking
 
 from app_resources import mongo_client, pinecone_client, model
 
-# ─────────────────── env / clients ─────────────────
+# ------------------------------------------------------------
+# Environment & Globals
+# ------------------------------------------------------------
 load_dotenv()
-OPENAI_API_KEY = os.getenv("OPEN_AI")
 DATABASE_NAME  = os.getenv("DATABASE_NAME")
+OPENAI_API_KEY = os.getenv("OPEN_AI")
 
 client_async_openai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 client_sync_openai  = OpenAI(api_key=OPENAI_API_KEY)
 
+torch.classes.__path__ = []           # fixes torch / streamlit clash
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# ------------------------------------------------------------
+# Pinecone & Mongo
+# ------------------------------------------------------------
 judgment_index = pinecone_client.Index("judgments-names")
 law_index      = pinecone_client.Index("laws-names")
 
-db = mongo_client[DATABASE_NAME]
-judgment_coll = db["judgments"]
-law_coll      = db["laws"]
-conv_coll     = db["conversations"]
+db                    = mongo_client[DATABASE_NAME]
+judgment_collection   = db["judgments"]
+law_collection        = db["laws"]
+conversation_coll     = db["conversations"]
 
-torch.classes.__path__ = []
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-# ───────────────────── UI CSS ──────────────────────
-st.set_page_config("Ask Mini Lawyer", "⚖️", layout="wide")
-st.markdown("""
+# ------------------------------------------------------------
+# Streamlit UI
+# ------------------------------------------------------------
+st.set_page_config(page_title="Ask Mini Lawyer Suite", page_icon="⚖️", layout="wide")
+COMMON_CSS = """
 <style>
 .chat-container{background:#1E1E1E;padding:20px;border-radius:10px}
 .chat-header{color:#4CAF50;font-size:36px;font-weight:bold;text-align:center}
 .user-message{background:#4CAF50;color:#ecf2f8;padding:10px;border-radius:10px;margin:10px}
 .bot-message{background:#44475a;color:#ecf2f8;padding:10px;border-radius:10px;margin:10px}
 .timestamp{font-size:0.75em;color:#bbb}
-.law-card{border:1px solid #e0e0e0;border-radius:10px;padding:20px;margin-bottom:15px;
-          box-shadow:0 2px 4px rgba(0,0,0,0.1);background:#f9f9f9}
+.law-card{border:1px solid #e0e0e0;border-radius:10px;padding:20px;margin-bottom:15px;box-shadow:0 2px 4px rgba(0,0,0,0.1);background:#f9f9f9}
 .law-title{font-size:20px;font-weight:bold;color:#333}
 .law-description{font-size:16px;color:#444;margin:10px 0}
 .law-meta{font-size:14px;color:#555}
 .stButton>button{background:#7ce38b;color:#fff;font-size:14px;border:none;padding:8px 16px;border-radius:5px;cursor:pointer}
 .stButton>button:hover{background:#69d67a}
 </style>
-""", unsafe_allow_html=True)
+"""
+st.markdown(COMMON_CSS, unsafe_allow_html=True)
 
-app_mode = st.sidebar.selectbox("Choose module", ["Chat Assistant", "Legal Finder"])
+app_mode = st.sidebar.selectbox("Choose module", ["Chat Assistant", "Legal Finder Assistant"])
 
-# ─────────────────── helpers ────────────────────
-# localStorage
-def ls_get(key: str) -> str | None:
-    with st.container():
-        st.markdown("<div style='display:none'>", unsafe_allow_html=True)
-        value = st_js_blocking(f"return localStorage.getItem('{key}');", key=f"ls_{key}")
-        st.markdown("</div>", unsafe_allow_html=True)
-    return value
+# ------------------------------------------------------------
+# Utility
+# ------------------------------------------------------------
+def get_localstorage_value(key: str):
+    return st_js_blocking(f"return localStorage.getItem('{key}');", key="get_"+key)
 
-def ls_set(key: str, value: str) -> None:
-    st_js(f"localStorage.setItem('{key}', '{value}');")
+def set_localstorage_value(key: str, val: str):
+    st_js(f"localStorage.setItem('{key}', '{val}');")
 
-# RTL text normalization
-heb = re.compile(r"[א-ת]")  
-SALUT = re.compile(r"\b(לכבוד|מר|מר\.?|גב'?|גברת|ד\"ר|ד\"ר\.?)\b")
+def read_pdf(f):
+    return "".join(p.get_text() for p in fitz.open(stream=f.read(), filetype="pdf"))
 
-def rtl_norm(text: str) -> str:
-    if not heb.search(text):
-        return text
-    try:
-        text = get_display(text)
-    except Exception:
-        text = " ".join(word[::-1] if heb.search(word) else word for word in text.split())  
-    text = SALUT.sub("", text)
-    return re.sub(r"\s{2,}", " ", text).strip()
+def read_docx(f):
+    return "\n".join(p.text for p in docx.Document(f).paragraphs)
 
-# File readers
-read_pdf = lambda f: "".join(rtl_norm(p.get_text()) for p in fitz.open(stream=f.read(), filetype="pdf"))
-read_docx = lambda f: "\n".join(rtl_norm(p.text) for p in docx.Document(f).paragraphs if p.text.strip())
-
-# Chat UI
-def add_msg(role: str, text: str) -> None:
+def add_message(role, content):
     st.session_state.setdefault("messages", []).append({
         "role": role,
-        "content": text,
-        "timestamp": datetime.now().strftime("%H:%M:%S")
-    })
+        "content": content,
+        "timestamp": datetime.now().strftime("%H:%M:%S")})
 
-def show_msgs() -> None:
-    for msg in st.session_state.get("messages", []):
-        css_class = "user-message" if msg["role"] == "user" else "bot-message"
+def display_messages():
+    for m in st.session_state.get("messages", []):
+        cls = "user-message" if m["role"] == "user" else "bot-message"
         st.markdown(
-            f"<div class='{css_class}'>{msg['content']}<div class='timestamp'>{msg['timestamp']}</div></div>",
-            unsafe_allow_html=True,
+            f"<div class='{cls}'>{m['content']}<div class='timestamp'>{m['timestamp']}</div></div>",
+            unsafe_allow_html=True
         )
 
-# Text processing
-def chunk_text(text: str, max_len: int = 450) -> list[str]:
-    if not isinstance(text, str):
-        text = str(text)
-    sentences = re.split(r"(?:\.|\?|!)\s+", text)
-    chunks, current = [], ""
-    for sentence in sentences:
-        if len(current) + len(sentence) > max_len and current:
-            chunks.append(current.strip())
-            current = sentence
+# ------------------------------------------------------------
+# Text helpers
+# ------------------------------------------------------------
+def chunk_text(txt, max_len=450):
+    sentences = re.split(r'(?:\.|\?|!)\s+', txt)
+    chunks, cur = [], ""
+    for s in sentences:
+        if len(cur) + len(s) > max_len and cur:
+            chunks.append(cur.strip())
+            cur = s
         else:
-            current += " " + sentence
-    if current.strip():
-        chunks.append(current.strip())
+            cur += " " + s
+    if cur.strip():
+        chunks.append(cur.strip())
     return chunks[:20]
 
-contains_en = lambda s: bool(re.search(r"[A-Za-z]", s))
+# ------------------------------------------------------------
+# Robust document classifier
+# ------------------------------------------------------------
+CLS_PROMPT = """
+אתה מסווג מסמכים משפטיים. החזר *מילה אחת בלבד* מתוך הרשימה:
+מכתב_פיטורין, חוזה, תקנון, תביעה, פסק_דין, מכתב_אחר
 
-def ensure_he(text: str) -> str:
-    english_word_count = sum(contains_en(word) for word in text.split())
-    if english_word_count <= 3:
-        return text
-    response = client_sync_openai.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": "תרגם לעברית מלאה:\n" + text}],
-        temperature=0,
-        max_tokens=len(text) // 2,
-    )
-    return response.choices[0].message.content.strip()
+• **מכתב_פיטורין** – הודעה על סיום העסקה (termination notice), כוללת תאריך סיום, פיצויי פיטורין, הודעה מוקדמת.
+• **תביעה** – כתב תביעה לבית-משפט, עם תובע/נתבע וסעד מבוקש.
+• **חוזה**  – הסכם בין צדדים עם סעיפים הדדיים.
+• **תקנון** – כללים/נהלים כלליים (לרוב פורמט PDF של חברה/עמותה).
+• **פסק_דין** – החלטה סופית של בית-משפט.
+• **מכתב_אחר** – כל מכתב רשמי שלא מתאים לקטגוריות לעיל.
 
+דוגמה:  
+«הריני להודיעך על הפסקת עבודתך בחברה…» → מכתב_פיטורין  
+«בית-הדין הנכבד מתבקש לחייב את הנתבע…» → תביעה
 
-
-
-# ───────────── classification ─────────────
-DOC_LABELS = {
-    "חוזה_עבודה":  "הסכם בין מעסיק לעובד או מועמד לעבודה",
-    "חוזה_שכירות": "הסכם להשכרת דירה, משרד או נכס אחר",
-    "חוזה_שירות":  "הסכם בין מזמין לספק שירות",
-    "מכתב_פיטורין": "הודעה על סיום העסקה או הפסקת עבודה",
-    "מכתב_התראה":  "מכתב דרישה או אזהרה לפני נקיטת הליכים",
-    "תקנון":       "מסמך כללי חובות וזכויות",
-    "NDA":         "הסכם סודיות ואי-גילוי",
-    "כתב_תביעה":   "מסמך פתיחת הליך בבית-משפט",
-    "כתב_הגנה":    "תגובה לכתב תביעה",
-    "פסק_דין":     "הכרעת בית-משפט",
-    "מסמך_אחר":    "כל מסמך משפטי אחר"
+הטקסט:
+"""
+KEYWORD_OVERRIDES = {
+    r"פיטור(ין|ים)|termination notice": "מכתב_פיטורין",
+    r"כתב\s+תביעה|הנתבע|התובע":        "תביעה",
 }
 
-CLS_EXAMPLES = [
-    ("הננו להודיעך בזאת כי העסקתך תסתיים בתאריך …", "מכתב_פיטורין"),
-    ("העובד מתחייב לשמור בסוד כל מידע",              "חוזה_עבודה"),
-    ("השוכר מתחייב להחזיר את הנכס כשהוא נקי",        "חוזה_שכירות"),
-    ("הצדדים מסכימים שלא לגלות מידע סודי",           "NDA"),
-    ("הנתבע ביצע רשלנות … לפיכך מתבקש ביהמ״ש",        "כתב_תביעה")
-]
-
-CLS_SYS = (
-    "אתה מסווג מסמכים משפטיים. החזר JSON במבנה:\n"
-    '{"label":"<LABEL>","confidence":0-100}\n'
-    f"עליך לבחור רק מתוך: {', '.join(DOC_LABELS.keys())}."
-)
-
-def classify_doc(txt: str) -> str:
-    # Ensure txt is a string to prevent crashes (e.g., from None or file objects)
-    if not isinstance(txt, str):
-        try:
-            txt = txt.decode("utf-8")
-        except Exception:
-            txt = str(txt)
-
-    chunks = chunk_text(txt, max_len=500)[:3] or [txt[:1500]]
-    msgs = [{"role": "system", "content": CLS_SYS}]
-    
-    for eg, lbl in CLS_EXAMPLES:
-        msgs += [
-            {"role": "user", "content": eg},
-            {"role": "assistant", "content": json.dumps({"label": lbl, "confidence": 95})}
-        ]
-    
-    for c in chunks:
-        msgs.append({"role": "user", "content": c})
-
+def classify_doc(clean_txt: str) -> str:
+    """
+    Robust few-shot classification with a heuristic post-check.
+    """
+    # Provide start+end to reduce classification bias
+    sample = clean_txt[:800] + "\n\n---\n\n" + clean_txt[-800:]
     try:
-        r = client_sync_openai.chat.completions.create(
+        resp = client_sync_openai.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=msgs,
-            temperature=0,
-            max_tokens=20
+            messages=[{"role": "system", "content": CLS_PROMPT + sample}],
+            temperature=0.0,
+            max_tokens=5,
         )
-        j = json.loads(r.choices[0].message.content)
-        return j["label"] if j.get("label") in DOC_LABELS else "מסמך_אחר"
+        cat = resp.choices[0].message.content.strip()
     except Exception:
-        return "מסמך_אחר"
+        cat = "מכתב_אחר"
 
+    # 2. heuristic override – אם מילה ברורה מזוהה במסמך
+    for pattern, override in KEYWORD_OVERRIDES.items():
+        if re.search(pattern, clean_txt, re.I):
+            cat = override
+            break
+    return cat
 
-# ────────────── prompts ──────────────
-H = lambda s: s + "  **ענה בעברית מלאה וללא מילים באנגלית. ציין מקור ממוספר (חוק או פס״ד) אחרי כל קביעה.**"
-PROMPTS = {
-    "מכתב_פיטורין": dict(
-        summary=H("סכם מכתב פיטורין: 1. פרטי עובד ותאריכים, 2. זכויות ותשלומים, 3. צעדים מומלצים."),
-        answer=H("אתה עו\"ד דיני-עבודה. השב רק על סמך המכתב וחוקי עבודה רלוונטיים.")
-    ),
-    "חוזה_עבודה": dict(
-        summary=H("סכם חוזה עבודה: 1. תנאי העסקה, 2. סעיפי סודיות ואי-תחרות, 3. סיכונים והמלצות."),
-        answer=H("אתה עו\"ד דיני-עבודה. נתח את סעיפי החוזה.")
-    ),
-    "תקנון": dict(
-        summary=H("סכם תקנון/מדיניות: 1. מטרות, 2. זכויות/חובות, 3. סיכונים לאי-ציות."),
-        answer=H("אתה עו\"ד חברות. הסבר תוקף סעיפי התקנון.")
-    ),
-    "כתב_תביעה": dict(
-        summary=H("סכם כתב תביעה: 1. עילות, 2. סעדים, 3. לוח זמנים דיוני."),
-        answer=H("אתה עו\"ד ליטיגציה. נתח את עילות התביעה.")
-    ),
-    "פסק_דין": dict(
-        summary=H("סכם פסק-דין: 1. שאלה משפטית, 2. קביעות, 3. הלכה."),
-        answer=H("אתה עו\"ד. הסבר את הלכת בית-המשפט.")
-    ),
-    "_": dict(
-        summary=H("סכם את המסמך: תקציר, נקודות עיקריות, השלכות."),
-        answer=H("אתה עו\"ד.")
-    )
-}
-tmpl = lambda l, k: PROMPTS.get(l, PROMPTS["_"])[k]
-
-# ───────────── retrieval (RAG) ─────────────
-embed = lambda t: model.encode([t], normalize_embeddings=True)[0]
-
-async def retrieve(q, doc):
-    q_emb = embed(q)
-    secs = [embed(c) for c in chunk_text(doc, 400)] if doc else []
-    cand = {"law": {}, "judg": {}}
-
-    async def add(match, kind):
-        meta, score = match.get("metadata", {}), match.get("score", 0)
-        key = "IsraelLawID" if kind == "law" else "CaseNumber"
-        _id = meta.get(key)
-        if not _id:
-            return
-        coll = law_coll if kind == "law" else judgment_coll
-        d = coll.find_one({key: _id})
-        if d:
-            cand[kind].setdefault(_id, {"doc": d, "scores": []})["scores"].append(score)
-
-    async def query(idx, vec):
-        vec_list = vec.tolist() if isinstance(vec, np.ndarray) else vec
-        return idx.query(
-            vector=vec_list,
-            top_k=5,
-            include_metadata=True
-        ).get("matches", [])
-
-    async def scan(vec):
-        for m in await query(law_index, vec):
-            await add(m, "law")
-        for m in await query(judgment_index, vec):
-            await add(m, "judg")
-
-    await asyncio.gather(scan(q_emb), *(scan(e) for e in secs[:10]))
-
-    top = lambda d: sorted(d.values(), key=lambda x: -np.mean(x["scores"]))[:3]
-    return [x["doc"] for x in top(cand["law"])], [x["doc"] for x in top(cand["judg"])]
-
-async def citations_ok(ans: str) -> bool:
-    pat = r'\[\d+\]|\(\d+\)'
-    lines = [l.strip() for l in ans.splitlines() if l.strip()]
-    return all(re.search(pat, l) for l in lines)
-
-# ───────────── gen – תשובה משפטית מקצועית ─────────────
-async def gen(q: str) -> str:
-    laws, judg = await retrieve(q, st.session_state.get("doc", ""))
-
-    SNIPPET = 400
-    def fmt_sources(lst, tag):
-        if not lst:
-            return f"לא נמצאו {tag} רלוונטיים."
-        return "\n".join(
-            f"[{i}] {d.get('Name', 'ללא שם')} – {(d.get('Description', '') or '')[:SNIPPET].strip()}"
-            for i, d in enumerate(lst, 1)
-        )
-
-    sys = (
-        tmpl(st.session_state.get("doctype", "_"), "answer") +
-        "\n\nהנחיות ניסוח (חובה):\n"
-        "• כתוב בעברית מלאה בלבד – אין להשתמש באנגלית.\n"
-        "• השתמש בלשון משפטית-מקצועית, פסקאות/סעיפים ממוספרים.\n"
-        "• הסתמך אך ורק על המקורות שלמטה, וציין בסוגריים את מספר-המקור ליד כל קביעה.\n"
-        f"\n--- מסמך ---\n{st.session_state.get('doc', '')[:1000]}" +
-        f"\n\n--- חוקים ---\n{fmt_sources(laws, 'חוקים')}" +
-        f"\n\n--- פסקי דין ---\n{fmt_sources(judg, 'פסקי דין')}"
-    )
-
-    r = await client_async_openai.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": sys},
-            {"role": "user", "content": q}
-        ],
-        temperature=0,
-        max_tokens=900
-    )
-    return r.choices[0].message.content.strip()
-
-# ───────────── chat assistant ─────────────
+# ------------------------------------------------------------
+# Chat Assistant
+# ------------------------------------------------------------
 def chat_assistant():
     st.markdown('<div class="chat-header">💬 Ask Mini Lawyer</div>', unsafe_allow_html=True)
 
-    # ───── cid & messages ─────
-    if "cid" not in st.session_state:
-        cid = ls_get("AMLChatId") or str(uuid.uuid4())
-        ls_set("AMLChatId", cid)
-        st.session_state.cid = cid
+    # ---------- session & history ----------
+    if "current_chat_id" not in st.session_state:
+        cid = get_localstorage_value("MiniLawyerChatId") or str(uuid.uuid4())
+        set_localstorage_value("MiniLawyerChatId", cid)
+        st.session_state.current_chat_id = cid
+    chat_id = st.session_state.current_chat_id
 
     if "messages" not in st.session_state:
-        conv = conv_coll.find_one({"local_storage_id": st.session_state.cid})
-        st.session_state["messages"] = conv.get("messages", []) if conv else []
+        convo = conversation_coll.find_one({"local_storage_id": chat_id})
+        st.session_state["messages"] = convo.get("messages", []) if convo else []
+    st.session_state.setdefault("user_name", None)
 
-    # ───── user name ─────
-    if "user_name" not in st.session_state:
-        stored = ls_get("AMLUserName")
-        if stored:
-            st.session_state["user_name"] = stored
+    # ---------- user name ----------
+    if not st.session_state["user_name"]:
+        with st.form("user_name_form"):
+            n = st.text_input("הכנס שם להתחלת שיחה:")
+            if st.form_submit_button("התחל שיחה") and n:
+                st.session_state["user_name"] = n
+                add_message("assistant", f"שלום {n}, איך אפשר לעזור?")
+                conversation_coll.update_one(
+                    {"local_storage_id": chat_id},
+                    {"$set": {"user_name": n, "messages": st.session_state["messages"]}},
+                    upsert=True,
+                )
+                st.rerun()
+        return
 
-    if "user_name" not in st.session_state:
-        with st.form("name"):
-            st.text_input("הכנס שם להתחלת שיחה:", key="user_name_input")
-            sub = st.form_submit_button("התחל")
-        if sub and st.session_state.get("user_name_input"):
-            st.session_state["user_name"] = st.session_state["user_name_input"]
-            ls_set("AMLUserName", st.session_state["user_name"])
-            add_msg("assistant", f"שלום {st.session_state['user_name']}, איך אפשר לעזור?")
-            conv_coll.update_one(
-                {"local_storage_id": st.session_state.cid},
-                {"$set": {
-                    "user_name": st.session_state["user_name"],
-                    "messages": st.session_state["messages"]
-                }},
-                upsert=True
-            )
-            st.rerun()
-        return  
+    # ---------- chat window ----------
+    with st.container():
+        st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+        display_messages()
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    # ───── history ─────
-    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-    show_msgs()
-    st.markdown("</div>", unsafe_allow_html=True)
+    # ---------- helper to strip english ----------
+    def strip_english_lines(text: str) -> str:
+        return "\n".join([ln for ln in text.splitlines() if re.search(r"[א-ת]", ln)])
 
-    # ───── upload ─────
-    up = st.file_uploader("📄 העלה מסמך", type=["pdf", "docx"])
-    if up:
-        raw = read_pdf(up) if up.type == "application/pdf" else read_docx(up)
-        st.session_state.doctype = classify_doc(raw)
-        st.session_state.doc = "\n".join(l for l in raw.splitlines() if heb.search(l))
-        st.success(f"סוג המסמך: {st.session_state.doctype}")
+    # ---------- file upload ----------
+    uploaded = st.file_uploader("📄 העלה מסמך משפטי", type=["pdf", "docx"])
+    if uploaded:
+        raw_txt   = read_pdf(uploaded) if uploaded.type == "application/pdf" else read_docx(uploaded)
+        clean_txt = strip_english_lines(raw_txt)
+        st.session_state["uploaded_doc_text"] = clean_txt
+        st.success("המסמך נטען – שורות באנגלית סוננו!")
 
-    # ───── summary ─────
-    if hasattr(st.session_state, "doc") and st.button("📋 סיכום"):
-        with st.spinner("סיכום..."):
-            prompt = (
-                tmpl(st.session_state.doctype, "summary") +
-                "\n\nכתוב 4-6 Bullet-ים קצרים (עד 30 מילים כל אחד):\n" +
-                st.session_state.doc[:2000]
+        # === NEW classification ===
+        st.session_state["doc_type"] = classify_doc(clean_txt)
+        st.success(f"📄 סוג המסמך שזוהה: {st.session_state['doc_type']}")
+
+    # ---------- summarise ----------
+    if "uploaded_doc_text" in st.session_state and st.button("📋 סכם את המסמך"):
+        with st.spinner("GPT מסכם את המסמך..."):
+            doc_type   = st.session_state.get("doc_type", "מסמך")
+            sum_prompt = (
+                f"אתה עורך-דין מומחה. סכם את {doc_type} בעברית בשלושה חלקים:\n"
+                "1. תקציר מנהלים – עד 100 מילים.\n"
+                "2. נקודות עיקריות – רשימת בולטים (מועדים, סכומים, סיכונים).\n"
+                "3. השלכות והמלצות מעשיות.\n"
+                "השתמש בעברית בלבד וללא מילים באנגלית.\n"
+                "—\n" + st.session_state["uploaded_doc_text"] + "\n—"
             )
             r = asyncio.run(
                 client_async_openai.chat.completions.create(
                     model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0,
-                    max_tokens=350
+                    messages=[{"role": "user", "content": sum_prompt}],
+                    temperature=0.1,
+                    max_tokens=700,
                 )
             )
-            st.session_state.summary = ensure_he(
-                r.choices[0].message.content.strip().replace("•", "–")
+            st.session_state["doc_summary"] = r.choices[0].message.content.strip()
+            st.success("📃 המסמך סוכם בהצלחה.")
+
+    if "doc_summary" in st.session_state:
+        st.markdown("### סיכום המסמך:")
+        st.info(st.session_state["doc_summary"])
+
+    # ---------- retrieval ----------
+    async def retrieve_sources(question: str):
+        q_emb = model.encode([question], normalize_embeddings=True)[0]
+        section_embs = (
+            [model.encode([sec], normalize_embeddings=True)[0] for sec in chunk_text(st.session_state["uploaded_doc_text"])]
+            if "uploaded_doc_text" in st.session_state else []
+        )
+        candidates = {"law": {}, "judgment": {}}
+
+        async def add_candidate(match, kind):
+            meta   = match.get("metadata", {})
+            score  = match.get("score", 0)
+            doc_id = meta.get("IsraelLawID" if kind == "law" else "CaseNumber")
+            if not doc_id:
+                return
+            doc = (law_collection.find_one({"IsraelLawID": doc_id}) if kind == "law"
+                   else judgment_collection.find_one({"CaseNumber": doc_id}))
+            if not doc:
+                return
+            candidates[kind].setdefault(doc_id, {"doc": doc, "scores": []})["scores"].append(score)
+
+        async def process_section(emb):
+            res_law, res_jud = await asyncio.gather(
+                asyncio.to_thread(law_index.query,      vector=emb.tolist(), top_k=1, include_metadata=True),
+                asyncio.to_thread(judgment_index.query, vector=emb.tolist(), top_k=1, include_metadata=True),
             )
+            for m in res_law.get("matches", []):
+                await add_candidate(m, "law")
+            for m in res_jud.get("matches", []):
+                await add_candidate(m, "judgment")
 
-    if st.session_state.get("summary"):
-        st.markdown("### סיכום:")
-        st.markdown(
-            f"<div dir='rtl' style='text-align:right'>{st.session_state.summary}</div>",
-            unsafe_allow_html=True
+        await asyncio.gather(*(process_section(e) for e in section_embs))
+
+        for m in law_index.query(vector=q_emb.tolist(), top_k=3, include_metadata=True).get("matches", []):
+            await add_candidate(m, "law")
+        for m in judgment_index.query(vector=q_emb.tolist(), top_k=3, include_metadata=True).get("matches", []):
+            await add_candidate(m, "judgment")
+
+        top_laws      = sorted(candidates["law"].values(),      key=lambda x: -np.mean(x["scores"]))[:3]
+        top_judgments = sorted(candidates["judgment"].values(), key=lambda x: -np.mean(x["scores"]))[:3]
+        return [d["doc"] for d in top_laws], [d["doc"] for d in top_judgments]
+
+    # ---------- answer ----------
+    async def generate_answer(question: str):
+        laws, judgments = await retrieve_sources(question)
+        doc_text = st.session_state.get("uploaded_doc_text", "")[:1500]
+
+        if not laws and not judgments and not doc_text:
+            return "לא נמצאו חוקים, פסקי-דין או מסמך רלוונטי למתן תשובה מוסמכת."
+
+        law_snip = "\n\n".join(d.get("Description", "")[:800] for d in laws)
+        jud_snip = "\n\n".join(d.get("Description", "")[:800] for d in judgments)
+
+        sys_prompt = (
+            "אתה עורך-דין ישראלי. עליך לנסח תשובה משפטית מקצועית ומנומקת בעברית בלבד.\n"
+            "חובה להסתמך אך ורק על החומר המצוטט מטה: המסמך שהועלה, חוקים ופסקי-דין. "
+            "אין להמציא מידע, ואין לשער. אם אין די מידע – כתוב 'אין לי מידע מוסמך לענות'.\n"
+            "יש לציין מקור ברור לכל טענה (שם חוק / פס״ד + מספר סעיף / עמוד).\n\n"
+            "--- חלקים רלוונטיים מהמסמך שהועלה ---\n" + doc_text +
+            "\n\n--- חוקים ---\n" + law_snip +
+            "\n\n--- פסקי דין ---\n" + jud_snip + "\n\n"
         )
 
-    # ───── answer helpers ─────
-    async def handle(q):
-        ans = ensure_he(await gen(q))
-        if await citations_ok(ans):
-            return ans
-        ans2 = ensure_he(
-            await gen(q + "\nחובה לציין מקור ממוספר (חוק/פס\"ד) אחרי כל משפט.")
+        r = await client_async_openai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user",   "content": question},
+            ],
+            temperature=0,
+            max_tokens=700,
         )
-        return ans2
+        return r.choices[0].message.content.strip()
 
-    # ───── ask form ─────
-    with st.form("ask", clear_on_submit=True):
-        q = st.text_area("הקלד שאלה משפטית:", height=100)
-        send = st.form_submit_button("שלח")
-
-    if send and q.strip():
-        ans = asyncio.run(handle(q.strip()))
-        add_msg("user", q.strip())
-        add_msg("assistant", ans)
-        conv_coll.update_one(
-            {"local_storage_id": st.session_state.cid},
-            {"$set": {
-                "messages": st.session_state["messages"],
-                "user_name": st.session_state["user_name"]
-            }},
-            upsert=True
+    # ---------- handle question ----------
+    async def handle_question(q):
+        ans = await generate_answer(q)
+        add_message("user", q)
+        add_message("assistant", ans)
+        conversation_coll.update_one(
+            {"local_storage_id": chat_id},
+            {"$set": {"messages": st.session_state["messages"], "user_name": st.session_state["user_name"]}},
+            upsert=True,
         )
         st.rerun()
 
-    # ───── clear chat ─────
+    # ---------- chat input ----------
+    with st.form("chat_form", clear_on_submit=True):
+        q = st.text_area("הקלד כאן שאלה משפטית (גם שאלות נוספות)", height=100)
+        if st.form_submit_button("שלח") and q.strip():
+            asyncio.run(handle_question(q.strip()))
+
+    # ---------- clear ----------
     if st.button("🗑 נקה שיחה"):
-        try:
-            conv_coll.delete_one({"local_storage_id": st.session_state.cid})
-        except Exception as e:
-            st.error(f"שגיאה בניקוי השיחה מבסיס הנתונים: {e}")
-        st_js_blocking("""
-            localStorage.removeItem('AMLUserName');
-            localStorage.removeItem('AMLChatId');
-        """)
+        conversation_coll.delete_one({"local_storage_id": chat_id})
+        st_js("localStorage.clear();")
         st.session_state.clear()
         st.rerun()
 
-
-# ───────────── legal finder assistant ─────────────
+# ------------------------------------
+# Legal Finder Assistant
+# ------------------------------------
 def load_document_details(kind, doc_id):
-    coll = judgment_coll if kind == "Judgment" else law_coll
+    coll = judgment_collection if kind == "Judgment" else law_collection
     key  = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
     return coll.find_one({key: doc_id})
-
 
 def get_explanation(scenario, doc, kind):
     name = doc.get("Name", "")
@@ -448,10 +359,8 @@ def get_explanation(scenario, doc, kind):
 {{
   "advice": "הסבר מקצועי בעברית",
   "score": 8
-}}
-אין להוסיף טקסט נוסף.
-"""
-    else:  # kind == "Law"
+}}"""
+    else:  # Law
         prompt = f"""בהתבסס על הסצנריו הבא:
 {scenario}
 
@@ -466,9 +375,7 @@ def get_explanation(scenario, doc, kind):
 {{
   "advice": "הסבר תמציתי ומקצועי בעברית",
   "score": 7
-}}
-אין להוסיף טקסט נוסף.
-"""
+}}"""
 
     try:
         response = client_sync_openai.chat.completions.create(
@@ -481,7 +388,6 @@ def get_explanation(scenario, doc, kind):
         st.error(f"Error from GPT: {e}")
         return {"advice": "לא ניתן לקבל הסבר בשלב זה.", "score": "N/A"}
 
-
 def legal_finder_assistant():
     st.title("Legal Finder Assistant")
 
@@ -489,7 +395,7 @@ def legal_finder_assistant():
     scen = st.text_area("Describe your scenario")
 
     if st.button("Find Suitable Results") and scen:
-        # ---------- Pinecone similarity search ---------------------------------------
+        # ---------- Pinecone similarity search ----------
         q_emb  = model.encode([scen], normalize_embeddings=True)[0]
         index  = judgment_index if kind == "Judgment" else law_index
         id_key = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
@@ -500,7 +406,7 @@ def legal_finder_assistant():
             st.info("No matches found.")
             return
 
-        # ---------- loop over matches ----------------------------------------
+        # ---------- loop over matches ----------
         for m in matches:
             doc_id = m.get("metadata", {}).get(id_key)
             if not doc_id:
@@ -528,25 +434,20 @@ def legal_finder_assistant():
                 unsafe_allow_html=True
             )
 
-            # ---------- GPT Advise (Hidden Score) -----------------------------
+            # ---------- GPT Advice -----------------------
             with st.spinner("Getting explanation..."):
                 result = get_explanation(scen, doc, kind)
 
             advice = result.get("advice", "")
-            # score  = result.get("score", "N/A") 
+            st.markdown(f"<span style='color:red;'>עצת המערכת: {advice}</span>", unsafe_allow_html=True)
 
-            st.markdown(
-                f"<span style='color:red;'>עצת האתר: {advice}</span>",
-                unsafe_allow_html=True
-            )
-
-            # ---------- full JSON toggle -------------------------------
+            # ---------- full JSON toggle -----------------
             with st.expander(f"View Full Details for {doc_id}"):
                 st.json(doc)
 
-
-
-
+# ------------------------------------------------------------
+# MAIN
+# ------------------------------------------------------------
 if app_mode == "Chat Assistant":
     chat_assistant()
 else:
