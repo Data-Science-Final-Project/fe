@@ -424,87 +424,129 @@ def chat_assistant():
 
 # ───────────── legal finder assistant ─────────────
 def load_document_details(kind, doc_id):
-    coll = judgment_coll if kind == "Judgment" else law_coll
-    key = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
-    return coll.find_one({key: doc_id})
+    coll = judgment_collection if kind=="Judgment" else law_collection
+    key  = "CaseNumber" if kind=="Judgment" else "IsraelLawID"
+    return coll.find_one({key:doc_id})
+
 
 def get_explanation(scenario, doc, kind):
-    name, desc = doc.get("Name", ""), doc.get("Description", "")
+    name = doc.get("Name", "")
+    desc = doc.get("Description", "")
+
     if kind == "Judgment":
-        prom = f"""בהתבסס על הסצנריו הבא:
+        prompt = f"""בהתבסס על הסצנריו הבא:
 {scenario}
 
 וכן על פרטי פסק הדין הבא:
 שם: {name}
 תיאור: {desc}
 
-הסבר בקצרה מדוע פסק דין זה מסייע ודרג 0-10.
-החזר JSON כמו:
-{{"advice":"הסבר","score":7}}"""
-    else:
-        prom = f"""בהתבסס על הסצנריו הבא:
+אנא הסבר בצורה תמציתית ומקצועית מדוע פסק דין זה יכול לעזור למקרה זה,
+והערך אותו בסולם 0-10 (0 = לא עוזר כלל, 10 = מתאים במדויק).
+**אל תיתן לרוב המסמכים ציון 9 – היה מגוון!**
+החזר JSON בלבד, לדוגמה:
+{{
+  "advice": "הסבר מקצועי בעברית",
+  "score": 8
+}}
+אין להוסיף טקסט נוסף.
+"""
+    else:  # kind == "Law"
+        prompt = f"""בהתבסס על הסצנריו הבא:
 {scenario}
 
 וכן על פרטי החוק הבא:
 שם: {name}
 תיאור: {desc}
 
-הסבר בקצרה מדוע החוק רלוונטי ודרג 0-10.
-החזר JSON כמו:
-{{"advice":"הסבר","score":6}}"""
+אנא הסבר בצורה תמציתית ומקצועית מדוע חוק זה יכול לעזור למקרה זה,
+והערך אותו בסולם 0-10 (0 = לא קשור, 10 = מתאים כמו כפפה).
+**אל תיתן לרוב החוקים ציון 9 – היה מגוון!**
+החזר JSON בלבד, לדוגמה:
+{{
+  "advice": "הסבר תמציתי ומקצועי בעברית",
+  "score": 7
+}}
+אין להוסיף טקסט נוסף.
+"""
+
     try:
-        r = client_sync_openai.chat.completions.create(
+        response = client_sync_openai.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prom}],
-            temperature=0.7
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
         )
-        return json.loads(r.choices[0].message.content.strip())
-    except Exception:
-        return {"advice": "שגיאה", "score": "N/A"}
+        return json.loads(response.choices[0].message.content.strip())
+    except Exception as e:
+        st.error(f"Error from GPT: {e}")
+        return {"advice": "לא ניתן לקבל הסבר בשלב זה.", "score": "N/A"}
+
+
 
 def legal_finder_assistant():
     st.title("Legal Finder Assistant")
+
     kind = st.selectbox("Choose what to search", ["Judgment", "Law"])
     scen = st.text_area("Describe your scenario")
+
     if st.button("Find Suitable Results") and scen:
-        q_emb = model.encode([scen], normalize_embeddings=True)[0]
-        idx = judgment_index if kind == "Judgment" else law_index
-        key = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
-        matches = idx.query(
-            vector=q_emb.tolist(),
-            top_k=5,
-            include_metadata=True
-        ).get("matches", [])
+        # ---------- Pinecone similarity search ---------------------------------------
+        q_emb  = model.encode([scen], normalize_embeddings=True)[0]
+        index  = judgment_index if kind == "Judgment" else law_index
+        id_key = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
+
+        res     = index.query(vector=q_emb.tolist(), top_k=5, include_metadata=True)
+        matches = res.get("matches", [])
         if not matches:
             st.info("No matches found.")
             return
+
+        # ---------- loop over matches ----------------------------------------
         for m in matches:
-            _id = m.get("metadata", {}).get(key)
-            doc = load_document_details(kind, _id)
+            doc_id = m.get("metadata", {}).get(id_key)
+            if not doc_id:
+                continue
+            doc = load_document_details(kind, doc_id)
             if not doc:
                 continue
-            name, desc = doc.get("Name", ""), doc.get("Description", "")
+
+            name     = doc.get("Name", "No Name")
+            desc     = doc.get("Description", "N/A")
             date_lbl = "DecisionDate" if kind == "Judgment" else "PublicationDate"
-            extra = (
+
+            extra_html = (
                 f"<div class='law-meta'>Procedure Type: {doc.get('ProcedureType','N/A')}</div>"
                 if kind == "Judgment" else ""
             )
+
             st.markdown(
-                f"<div class='law-card'><div class='law-title'>{name} (ID:{_id})</div>"
+                f"<div class='law-card'>"
+                f"<div class='law-title'>{name} (ID: {doc_id})</div>"
                 f"<div class='law-description'>{desc}</div>"
-                f"<div class='law-meta'>{date_lbl}: {doc.get(date_lbl,'N/A')}</div>{extra}</div>",
+                f"<div class='law-meta'>{date_lbl}: {doc.get(date_lbl, 'N/A')}</div>"
+                f"{extra_html}"
+                f"</div>",
                 unsafe_allow_html=True
             )
-            with st.spinner("GPT explanation..."):
-                res = get_explanation(scen, doc, kind)
+
+            # ---------- GPT Advise (Hidden Score) -----------------------------
+            with st.spinner("Getting explanation..."):
+                result = get_explanation(scen, doc, kind)
+
+            advice = result.get("advice", "")
+            # score  = result.get("score", "N/A") 
+
             st.markdown(
-                f"<span style='color:red;'>עצת האתר: {res.get('advice','')}</span>",
+                f"<span style='color:red;'>עצת האתר: {advice}</span>",
                 unsafe_allow_html=True
             )
-            with st.expander(f"View Full Details for {_id}"):
+
+            # ---------- full JSON toggle -------------------------------
+            with st.expander(f"View Full Details for {doc_id}"):
                 st.json(doc)
 
-# ─────────────────── main ───────────────────
+
+
 if app_mode == "Chat Assistant":
     chat_assistant()
 else:
