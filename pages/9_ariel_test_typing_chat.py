@@ -112,37 +112,53 @@ DOC_LABELS = {
     "חוזה_שירות":      "הסכם בין מזמין לספק שירות",
     "מכתב_פיטורין":    "הודעה על סיום העסקה או הפסקת עבודה",
     "מכתב_התראה":      "מכתב דרישה או אזהרה לפני נקיטת הליכים",
-    "תקנון":           "מסמך כללי חובות וזכויות (לדוגמה: תקנון חברה, אתר, עמותה)",
+    "תקנון":           "מסמך כללי חובות וזכויות",
     "NDA":             "הסכם סודיות ואי-גילוי",
     "כתב_תביעה":       "מסמך פתיחת הליך בבית-משפט",
     "כתב_הגנה":        "תגובה לכתב תביעה",
     "פסק_דין":         "הכרעת בית-משפט",
-    "מסמך_אחר":        "כל מסמך משפטי אחר שאינו נכנס לאף קטגוריה"
+    "מסמך_אחר":        "כל מסמך משפטי אחר"
 }
 
+# כמה דוגמאות few-shot
+CLS_EXAMPLES = [
+    ("הננו להודיעך בזאת כי העסקתך תסתיים בתאריך …", "מכתב_פיטורין"),
+    ("העובד מתחייב לשמור בסוד כל מידע",              "חוזה_עבודה"),
+    ("השוכר מתחייב להחזיר את הנכס כשהוא נקי",        "חוזה_שכירות"),
+    ("הצדדים מסכימים שלא לגלות מידע סודי",           "NDA"),
+    ("הנתבע ביצע רשלנות … לפיכך מתבקש ביהמ״ש",        "כתב_תביעה")
+]
+
 CLS_SYS = (
-    "אתה מסווג מסמכים משפטיים בעברית. "
-    "קרא את הטקסט המצורף והחזר *רק* את שם התווית המתאימה מבין:\n"
-    + ", ".join(DOC_LABELS.keys()) +
-    "\nאין לכתוב שום טקסט נוסף."
+    "אתה מסווג מסמכים משפטיים. החזר JSON במבנה:\n"
+    '{"label":"<LABEL>","confidence":0-100}\n'
+    f"עליך לבחור רק מתוך: {', '.join(DOC_LABELS.keys())}."
 )
 
 def classify_doc(txt: str) -> str:
-    sample = txt[:1500]   # קטע מייצג, מקטין עלות
+    # ניקח עד 3 קטעים שונים מהמסמך
+    chunks = chunk_text(txt, L=500)[:3] or [txt[:1500]]
+    msgs   = [{"role":"system","content":CLS_SYS}]
+    # few-shot
+    for eg,lbl in CLS_EXAMPLES:
+        msgs += [{"role":"user","content":eg},
+                 {"role":"assistant","content":json.dumps({'label':lbl,'confidence':95})}]
+    # הקטעים האמיתיים
+    for c in chunks:
+        msgs.append({"role":"user","content":c})
+
     try:
-        resp = client_sync_openai.chat.completions.create(
+        r = client_sync_openai.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": CLS_SYS},
-                {"role": "user",   "content": sample}
-            ],
+            messages=msgs,
             temperature=0,
-            max_tokens=5
+            max_tokens=20
         )
-        label = resp.choices[0].message.content.strip()
-        return label if label in DOC_LABELS else "מסמך_אחר"
+        j = json.loads(r.choices[0].message.content)
+        return j["label"] if j.get("label") in DOC_LABELS else "מסמך_אחר"
     except Exception:
         return "מסמך_אחר"
+
 
 
 
@@ -165,39 +181,41 @@ PROMPTS={
 tmpl=lambda l,k: PROMPTS.get(l,PROMPTS["_"])[k]
 
 # ───────────── retrieval (RAG) ─────────────
-embed=lambda t: model.encode([t],normalize_embeddings=True)[0]
+embed = lambda t: model.encode([t], normalize_embeddings=True)[0]
 
-async def retrieve(q,doc):
-    q_emb=embed(q); secs=[embed(c) for c in chunk_text(doc)] if doc else []
-    cand={"law":{}, "judg":{}}
-    async def add(m,kind):
-        meta,score=m.get("metadata",{}), m.get("score",0)
-        key="IsraelLawID" if kind=="law" else "CaseNumber"; _id=meta.get(key)
-        if not _id: return
-        coll=law_coll if kind=="law" else judgment_coll
-        d=coll.find_one({key:_id}); 
-        if d: cand[kind].setdefault(_id,{"doc":d,"scores":[]})["scores"].append(score)
-    async def scan(e):
-        rl,rj=await asyncio.gather(
-            asyncio.to_thread(law_index.query,vector=e.tolist(),top_k=1,include_metadata=True),
-            asyncio.to_thread(judgment_index.query,vector=e.tolist(),top_k=1,include_metadata=True))
-        [await add(m,"law") for m in rl.get("matches",[])]
-        [await add(m,"judg")for m in rj.get("matches",[])]
-    await asyncio.gather(*(scan(e) for e in secs))
-    for m in law_index.query(vector=q_emb.tolist(),top_k=3,include_metadata=True).get("matches",[]):  await add(m,"law")
-    for m in judgment_index.query(vector=q_emb.tolist(),top_k=3,include_metadata=True).get("matches",[]): await add(m,"judg")
-    top=lambda d: sorted(d.values(), key=lambda x:-np.mean(x["scores"]))[:3]
+async def retrieve(q, doc):
+    q_emb = embed(q)
+    secs  = [embed(c) for c in chunk_text(doc, 400)] if doc else []
+
+    cand = {"law": {}, "judg": {}}
+
+    async def add(match, kind):
+        meta, score = match.get("metadata", {}), match.get("score", 0)
+        key = "IsraelLawID" if kind == "law" else "CaseNumber"
+        _id = meta.get(key)
+        if not _id:
+            return
+        coll = law_coll if kind == "law" else judgment_coll
+        d = coll.find_one({key: _id})
+        if d:
+            cand[kind].setdefault(_id, {"doc": d, "scores": []})["scores"].append(score)
+
+    async def query(idx, vec):
+        return idx.query(vector=vec, top_k=5, include_metadata=True).get("matches", [])
+
+    async def scan(vec):
+        for m in await query(law_index, vec):      await add(m, "law")
+        for m in await query(judgment_index, vec): await add(m, "judg")
+
+    await asyncio.gather(scan(q_emb), *(scan(e) for e in secs[:10]))
+
+    top = lambda d: sorted(d.values(), key=lambda x: -np.mean(x["scores"]))[:3]
     return [x["doc"] for x in top(cand["law"])], [x["doc"] for x in top(cand["judg"])]
 
-async def citations_ok(ans:str)->bool:
-    if contains_en(ans): return False
-    try:
-        r=await client_async_openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role":"user","content":"Does every claim have an explicit citation? Answer Yes/No.\n"+ans}],
-            temperature=0,max_tokens=3)
-        return "yes" in r.choices[0].message.content.lower()
-    except: return True
+async def citations_ok(ans: str) -> bool:
+    pat = r'\[\d+\]|\(\d+\)'        # חייב מספר בין סוגריים / מרובעים
+    lines = [l.strip() for l in ans.splitlines() if l.strip()]
+    return all(re.search(pat, l) for l in lines)
 
 # ───────────── chat assistant ─────────────
 def chat_assistant():
@@ -236,31 +254,56 @@ def chat_assistant():
         st.success(f"סוג המסמך: {st.session_state.doctype}")
 
     # summary
-    if hasattr(st.session_state,"doc") and st.button("📋 סיכום"):
-        with st.spinner("סיכום..."):
-            prompt=tmpl(st.session_state.doctype,"summary")+"\n"+st.session_state.doc
-            r=asyncio.run(client_async_openai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role":"user","content":prompt}],
-                temperature=0,max_tokens=700))
-            st.session_state.summary=ensure_he(r.choices[0].message.content.strip())
-    if st.session_state.get("summary"):
-        st.markdown("### סיכום:"); st.markdown(f"<div dir='rtl' style='text-align:right'>{st.session_state.summary}</div>",unsafe_allow_html=True)
-
-    # answer helpers
-    async def gen(q):
-        laws,judg=await retrieve(q,st.session_state.get("doc",""))
-        law_txt="\n\n".join(d.get("Description","")[:800] for d in laws) or "לא נמצאו חוקים רלוונטיים."
-        jud_txt="\n\n".join(d.get("Description","")[:800] for d in judg) or "לא נמצאו פסקי דין רלוונטיים."
-        sys=tmpl(st.session_state.get("doctype","_"),"answer")+\
-            f"\n\n--- מסמך ---\n{st.session_state.get('doc','')[:1500]}" +\
-            f"\n\n--- חוקים ---\n{law_txt}" +\
-            f"\n\n--- פסקי דין ---\n{jud_txt}"
-        r=await client_async_openai.chat.completions.create(
+    if hasattr(st.session_state, "doc") and st.button("📋 סיכום"):
+    with st.spinner("סיכום..."):
+        prompt = (
+            tmpl(st.session_state.doctype, "summary") +
+            "\n\nכתוב 4-6 Bullet-ים קצרים (עד 30 מילים כל אחד):\n" +
+            st.session_state.doc[:2000]      
+        )
+        r = asyncio.run(client_async_openai.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role":"system","content":sys},{"role":"user","content":q}],
-            temperature=0,max_tokens=700)
-        return r.choices[0].message.content.strip()
+            messages=[{"role":"user","content":prompt}],
+            temperature=0,
+            max_tokens=350
+        ))
+        st.session_state.summary = ensure_he(
+            r.choices[0].message.content.strip().replace("•", "–")
+        )
+              
+    # answer helpers
+    # ───────────── gen – תשובה משפטית מקצועית בעברית ─────────────
+async def gen(q: str) -> str:
+    laws, judg = await retrieve(q, st.session_state.get("doc", ""))
+
+    SNIPPET = 400
+    def fmt_sources(lst, tag):
+        if not lst:
+            return f"לא נמצאו {tag} רלוונטיים."
+        return "\n".join(
+            f"[{i}] {d.get('Name','ללא שם')} – {(d.get('Description','') or '')[:SNIPPET].strip()}"
+            for i, d in enumerate(lst, 1)
+        )
+
+    sys = (
+        tmpl(st.session_state.get("doctype", "_"), "answer") +
+        "\n\nהנחיות ניסוח (חובה):\n"
+        "• כתוב בעברית מלאה בלבד – אין להשתמש באנגלית.\n"
+        "• השתמש בלשון משפטית-מקצועית, פסקאות/סעיפים ממוספרים.\n"
+        "• הסתמך אך ורק על המקורות שלמטה, וציין בסוגריים את מספר-המקור ליד כל קביעה.\n"
+        f"\n--- מסמך ---\n{st.session_state.get('doc', '')[:1000]}" +
+        f"\n\n--- חוקים ---\n{fmt_sources(laws, 'חוקים')}" +
+        f"\n\n--- פסקי דין ---\n{fmt_sources(judg, 'פסקי דין')}"
+    )
+
+    r = await client_async_openai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "system", "content": sys},
+                  {"role": "user",   "content": q}],
+        temperature=0,
+        max_tokens=900
+    )
+    return r.choices[0].message.content.strip()
 
     async def handle(q):
         ans=ensure_he(await gen(q))
