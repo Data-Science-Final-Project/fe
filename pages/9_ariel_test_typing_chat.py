@@ -296,7 +296,7 @@ def legal_finder():
         for m in res.get("matches", []):
             _id = m.get("metadata", {}).get(key)
             coll= judgment_collection if kind=="Judgment" else law_collection
-            doc = coll.find_one({key:_id}); �
+            doc = coll.find_one({key:_id});
             if not doc: continue
             st.markdown(
                 f"<div class='law-card'><div class='law-title'>{doc.get('Name','')} (ID:{_id})</div>"
