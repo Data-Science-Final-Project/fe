@@ -436,4 +436,4 @@ def legal_finder_assistant():
 if app_mode=="Chat Assistant":
     chat_assistant()
 else:
-    legal_finder()
+    legal_finder_assistant()
