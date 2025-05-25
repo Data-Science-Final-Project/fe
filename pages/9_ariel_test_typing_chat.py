@@ -82,16 +82,27 @@ def chunk_text(txt, L=450):
 # ───────────── Hebrew-only enforcement ──────────────────────
 contains_english = lambda t: bool(re.search(r"[A-Za-z]", t))
 def ensure_hebrew(t):
-    if not contains_english(t): return t
+    # הפעולה רצה רק אם יש יותר מ-3 מילים לועזיות
+    if sum(bool(re.search('[A-Za-z]', w)) for w in t.split()) <= 3:
+        return t
     prompt = "תרגם את הטקסט הבא לעברית מלאה וללא מילים באנגלית:\n" + t
     r = client_sync_openai.chat.completions.create(
-        model="gpt-3.5-turbo", messages=[{"role":"user","content":prompt}],
+        model="gpt-3.5-turbo",
+        messages=[{"role":"user","content":prompt}],
         temperature=0, max_tokens=len(t)//2)
     return r.choices[0].message.content.strip()
 
 # ───────────────────── CLASSIFICATION ───────────────────────
 CATEGORIES = {
- "מכתב_פיטורין": {"regex":[r"פיטור(ין|ים)|termination notice"]},
+ "מכתב_פיטורין": {"regex":[
+        r"פיטור(?:ין|ים)",
+        r"סיום\s+ה?עסקה",
+        r"הודעת?\s+פיטור(?:ין|ים)",
+        r"הודעת?\s+סיום\s+ה?עסקה",
+        r"סיום\s+עבודת(?:ך|ו|ה)",
+        r"פיטור(?:ייך|יך|ך)",
+        r"termination\s+notice"
+ ]},
  "חוזה_עבודה":   {"regex":[r"הסכם\s+עבודה|employment agreement"]},
  "NDA":          {"regex":[r"סודיות|confidentiality"]},
  "CEASE_DESIST": {"regex":[r"חדל|להפסיק|cease and desist"]},
@@ -100,19 +111,35 @@ CATEGORIES = {
  "פסק_דין":      {"regex":[r"פסק[-\s]?דין|בית.?משפט"]},
  "מכתב_אחר":     {"regex":[]}
 }
+
 CLS_SYSTEM = "אתה מסווג מסמכים משפטיים. החזר תווית אחת בלבד: " + ", ".join(CATEGORIES.keys())
-def classify_doc(txt:str)->str:
-    sample = txt[:800] + "\n---\n" + txt[-800:]
+
+def classify_doc(txt: str) -> str:
+    """
+    שלב 1 – בדיקה מהירה לפי ביטויים רגולריים;
+    שלב 2 – נפילה ל-GPT-3.5-turbo אם לא זוהה.
+    """
+    # 1️⃣ כלל-אצבע (מהיר)
+    for lab, d in CATEGORIES.items():
+        if any(re.search(p, txt, re.IGNORECASE) for p in d["regex"]):
+            return lab
+
+    # 2️⃣ GPT Fallback
+    sample = txt[:1500]  # קטע מייצג
     try:
         resp = client_sync_openai.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[{"role":"system","content":CLS_SYSTEM+"\n"+sample}],
-            temperature=0, max_tokens=5)
+            messages=[
+                {"role": "system", "content": CLS_SYSTEM},
+                {"role": "user",   "content": sample}
+            ],
+            temperature=0,
+            max_tokens=15
+        )
         label = resp.choices[0].message.content.strip()
     except Exception:
         label = "מכתב_אחר"
-    for lab,d in CATEGORIES.items():
-        if any(re.search(p,txt,re.I) for p in d["regex"]): label = lab
+
     return label if label in CATEGORIES else "מכתב_אחר"
 
 # ────────────────────── TEMPLATES ───────────────────────────
@@ -150,11 +177,10 @@ async def retrieve(query, doc):
         key   = "IsraelLawID" if kind=="law" else "CaseNumber"
         _id   = meta.get(key); coll = law_collection if kind=="law" else judgment_collection
         if not _id: return
-        d = coll.find_one({key:_id}); 
+        d = coll.find_one({key:_id})
         if not d: return
         cand[kind].setdefault(_id, {"doc":d,"scores":[]})["scores"].append(score)
 
-    # scan each section
     async def scan(e):
         rl, rj = await asyncio.gather(
             asyncio.to_thread(law_index.query,      vector=e.tolist(), top_k=1, include_metadata=True),
@@ -163,7 +189,7 @@ async def retrieve(query, doc):
         [await add(m,"judg") for m in rj.get("matches",[])]
 
     await asyncio.gather(*(scan(e) for e in secs))
-    # add global matches
+    # global query
     for m in law_index.query(vector=q_emb.tolist(), top_k=3, include_metadata=True).get("matches",[]):   await add(m,"law")
     for m in judgment_index.query(vector=q_emb.tolist(), top_k=3, include_metadata=True).get("matches",[]): await add(m,"judg")
 
@@ -220,9 +246,11 @@ def chat_assistant():
     # file upload
     up = st.file_uploader("📄 העלה מסמך", type=["pdf","docx"])
     if up:
-        raw = read_pdf(up) if up.type=="application/pdf" else read_docx(up)
-        st.session_state.doc     = "\n".join(l for l in raw.splitlines() if re.search(r"[א-ת]", l))
-        st.session_state.doctype = classify_doc(st.session_state.doc)
+        raw_txt = read_pdf(up) if up.type=="application/pdf" else read_docx(up)
+        # סיווג – על טקסט מלא
+        st.session_state.doctype = classify_doc(raw_txt)
+        # לטובת סיכום/שאילתה – רק שורות עבריות
+        st.session_state.doc = "\n".join(l for l in raw_txt.splitlines() if re.search(r"[א-ת]", l))
         st.success(f"סוג המסמך: {st.session_state.doctype}")
 
     # summary button
@@ -290,9 +318,9 @@ def legal_finder():
         key  = "CaseNumber" if kind=="Judgment" else "IsraelLawID"
         res  = idx.query(vector=emb.tolist(), top_k=5, include_metadata=True)
         for m in res.get("matches", []):
-            _id = m.get("metadata", {}).get(key); 
+            _id = m.get("metadata", {}).get(key) 
             coll= judgment_collection if kind=="Judgment" else law_collection
-            doc = coll.find_one({key:_id}); 
+            doc = coll.find_one({key:_id})
             if not doc: continue
             st.markdown(
                 f"<div class='law-card'><div class='law-title'>{doc.get('Name','')} (ID:{_id})</div>"
