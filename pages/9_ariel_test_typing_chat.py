@@ -55,15 +55,18 @@ app_mode = st.sidebar.selectbox("Choose module", ["Chat Assistant", "Legal Finde
 # ─────────────────── helpers ────────────────────
 def ls_get(key: str):
     
-    return st_js_blocking(
-        f"return localStorage.getItem('{key}');",
-        key="ls_" + key,
-        style={"display": "none"}   # האלמנט מוסתר
-    )
+    with st.container():
+        st.markdown("<div style='display:none'>", unsafe_allow_html=True)
+        val = st_js_blocking(
+            f"return localStorage.getItem('{key}');",
+            key="ls_"+key
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+    return val
 
 def ls_set(key: str, val: str):
-    
     st_js(f"localStorage.setItem('{key}', '{val}');")
+
 
 heb = re.compile(r'[א-ת]')
 SALUT = r'\b(לכבוד|מר|מר\.?|גב\'?|גברת|ד"ר|ד"ר\.?)\b'
