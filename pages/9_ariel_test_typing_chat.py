@@ -196,17 +196,14 @@ def chat_assistant():
         conv = conversation_coll.find_one({"local_storage_id": st.session_state.cid})
         st.session_state["messages"] = conv.get("messages", []) if conv else []
 
-    st.session_state.setdefault("name", None)
-
     # ---------- name form ----------
-    if not st.session_state["name"]:
+    if "name" not in st.session_state:                    # ← לא קוראים לפני כתיבה
         with st.form("name"):
             n = st.text_input("הכנס שם להתחלת שיחה:")
-            submitted = st.form_submit_button("התחל")   # ← שומרים דגל
+            submitted = st.form_submit_button("התחל")
 
-        
         if submitted and n:
-            st.session_state["name"] = n
+            st.session_state["name"] = n                  # כתיבה ראשונה בטור הריצה
             add_msg("assistant", f"שלום {n}, איך אפשר לעזור?")
             conversation_coll.update_one(
                 {"local_storage_id": st.session_state.cid},
@@ -215,7 +212,7 @@ def chat_assistant():
                 upsert=True
             )
             st.rerun()
-        return   
+        return
 
     # ---------- chat history ----------
     st.markdown('<div class="chat-container">', unsafe_allow_html=True)
@@ -301,7 +298,6 @@ def chat_assistant():
         st_js("localStorage.clear()")
         st.session_state.clear()
         st.rerun()
-
 
 # ─────────────── LEGAL FINDER ───────────────
 def legal_finder():
