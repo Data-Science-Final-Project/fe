@@ -138,7 +138,7 @@ def classify_doc(clean_txt: str) -> str:
             model="gpt-3.5-turbo",
             messages=[{"role": "system", "content": CLS_PROMPT + sample}],
             temperature=0.0,
-            max_tokens=3,
+            max_tokens=5,
         )
         cat = resp.choices[0].message.content.strip()
     except Exception:
