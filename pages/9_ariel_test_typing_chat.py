@@ -424,9 +424,9 @@ def chat_assistant():
 
 # ───────────── legal finder assistant ─────────────
 def load_document_details(kind, doc_id):
-    coll = judgment_collection if kind=="Judgment" else law_collection
-    key  = "CaseNumber" if kind=="Judgment" else "IsraelLawID"
-    return coll.find_one({key:doc_id})
+    coll = judgment_coll if kind == "Judgment" else law_coll
+    key  = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
+    return coll.find_one({key: doc_id})
 
 
 def get_explanation(scenario, doc, kind):
@@ -480,7 +480,6 @@ def get_explanation(scenario, doc, kind):
     except Exception as e:
         st.error(f"Error from GPT: {e}")
         return {"advice": "לא ניתן לקבל הסבר בשלב זה.", "score": "N/A"}
-
 
 
 def legal_finder_assistant():
@@ -544,6 +543,7 @@ def legal_finder_assistant():
             # ---------- full JSON toggle -------------------------------
             with st.expander(f"View Full Details for {doc_id}"):
                 st.json(doc)
+
 
 
 
