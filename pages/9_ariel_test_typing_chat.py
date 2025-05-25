@@ -184,83 +184,124 @@ async def citations_ok(ans:str)->bool:
 
 # ─────────────── CHAT ASSISTANT ───────────────
 def chat_assistant():
-    st.markdown('<div class="chat-header">💬 Ask Mini Lawyer</div>',unsafe_allow_html=True)
-    if "cid" not in st.session_state:
-        cid=ls_get("AMLChatId") or str(uuid.uuid4()); ls_set("AMLChatId",cid); st.session_state.cid=cid
-    if "messages" not in st.session_state:
-        conv=conversation_coll.find_one({"local_storage_id":st.session_state.cid})
-        st.session_state["messages"]=conv.get("messages",[]) if conv else []
-    st.session_state.setdefault("name",None)
+    st.markdown('<div class="chat-header">💬 Ask Mini Lawyer</div>', unsafe_allow_html=True)
 
+    # --- bootstrap session ---
+    if "cid" not in st.session_state:
+        cid = ls_get("AMLChatId") or str(uuid.uuid4())
+        ls_set("AMLChatId", cid)
+        st.session_state.cid = cid
+
+    if "messages" not in st.session_state:
+        conv = conversation_coll.find_one({"local_storage_id": st.session_state.cid})
+        st.session_state["messages"] = conv.get("messages", []) if conv else []
+
+    st.session_state.setdefault("name", None)
+
+    # ---------- name form ----------
     if not st.session_state["name"]:
         with st.form("name"):
-            n=st.text_input("הכנס שם להתחלת שיחה:")
-            if st.form_submit_button("התחל") and n:
-                st.session_state["name"]=n
-                add_msg("assistant",f"שלום {n}, איך אפשר לעזור?")
-                conversation_coll.update_one({"local_storage_id":st.session_state.cid},
-                                             {"$set":{"user_name":n,"messages":st.session_state["messages"]}},upsert=True)
-                st.rerun()
-        return
+            n = st.text_input("הכנס שם להתחלת שיחה:")
+            submitted = st.form_submit_button("התחל")   # ← שומרים דגל
 
-    st.markdown('<div class="chat-container">',unsafe_allow_html=True); show_msgs(); st.markdown("</div>",unsafe_allow_html=True)
+        
+        if submitted and n:
+            st.session_state["name"] = n
+            add_msg("assistant", f"שלום {n}, איך אפשר לעזור?")
+            conversation_coll.update_one(
+                {"local_storage_id": st.session_state.cid},
+                {"$set": {"user_name": n,
+                          "messages": st.session_state["messages"]}},
+                upsert=True
+            )
+            st.rerun()
+        return   
 
-    # upload
-    up=st.file_uploader("📄 העלה מסמך",type=["pdf","docx"])
+    # ---------- chat history ----------
+    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+    show_msgs()
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---------- file upload ----------
+    up = st.file_uploader("📄 העלה מסמך", type=["pdf", "docx"])
     if up:
-        raw_txt = read_pdf(up) if up.type=="application/pdf" else read_docx(up)
+        raw_txt = read_pdf(up) if up.type == "application/pdf" else read_docx(up)
         st.session_state.doctype = classify_doc(raw_txt)
-        st.session_state.doc     = "\n".join(l for l in raw_txt.splitlines() if heb.search(l))
+        st.session_state.doc = "\n".join(l for l in raw_txt.splitlines() if heb.search(l))
         st.success(f"סוג המסמך: {st.session_state.doctype}")
 
-    # summary
-    if hasattr(st.session_state,"doc") and st.button("📋 סיכום"):
+    # ---------- summary ----------
+    if hasattr(st.session_state, "doc") and st.button("📋 סיכום"):
         with st.spinner("סיכום..."):
-            prompt=tmpl(st.session_state.doctype,"summary")+"\n"+st.session_state.doc
-            r=asyncio.run(client_async_openai.chat.completions.create(
-                model="gpt-4o-mini",messages=[{"role":"user","content":prompt}],
-                temperature=0,max_tokens=700))
+            prompt = tmpl(st.session_state.doctype, "summary") + "\n" + st.session_state.doc
+            r = asyncio.run(
+                client_async_openai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0,
+                    max_tokens=700,
+                )
+            )
             st.session_state.summary = ensure_hebrew(r.choices[0].message.content.strip())
+
     if st.session_state.get("summary"):
         st.markdown("### סיכום:")
-        st.markdown(f"<div dir='rtl' style='text-align:right;line-height:1.6'>{st.session_state.summary}</div>",unsafe_allow_html=True)
+        st.markdown(
+            f"<div dir='rtl' style='text-align:right;line-height:1.6'>{st.session_state.summary}</div>",
+            unsafe_allow_html=True,
+        )
 
-    # answer generator
+    # ---------- async answer helpers ----------
     async def generate_answer(q):
-        laws,judg = await retrieve(q,st.session_state.get("doc",""))
-        law_txt = "\n\n".join(d.get("Description","")[:800] for d in laws) or "לא נמצאו חוקים רלוונטיים."
-        jud_txt = "\n\n".join(d.get("Description","")[:800] for d in judg) or "לא נמצאו פסקי דין רלוונטיים."
-        sys = tmpl(st.session_state.get("doctype","_"),"answer")+\
-              f"\n\n--- מסמך ---\n{st.session_state.get('doc','')[:1500]}" +\
-              f"\n\n--- חוקים ---\n{law_txt}" +\
-              f"\n\n--- פסקי דין ---\n{jud_txt}"
-        r=await client_async_openai.chat.completions.create(
+        laws, judg = await retrieve(q, st.session_state.get("doc", ""))
+        law_txt = "\n\n".join(d.get("Description", "")[:800] for d in laws) or "לא נמצאו חוקים רלוונטיים."
+        jud_txt = "\n\n".join(d.get("Description", "")[:800] for d in judg) or "לא נמצאו פסקי דין רלוונטיים."
+        sys = (
+            tmpl(st.session_state.get("doctype", "_"), "answer")
+            + f"\n\n--- מסמך ---\n{st.session_state.get('doc', '')[:1500]}"
+            + f"\n\n--- חוקים ---\n{law_txt}"
+            + f"\n\n--- פסקי דין ---\n{jud_txt}"
+        )
+        r = await client_async_openai.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role":"system","content":sys},{"role":"user","content":q}],
-            temperature=0,max_tokens=700)
+            messages=[{"role": "system", "content": sys}, {"role": "user", "content": q}],
+            temperature=0,
+            max_tokens=700,
+        )
         return r.choices[0].message.content.strip()
 
     async def handle(q):
-        ans=ensure_hebrew(await generate_answer(q))
-        if await citations_ok(ans): return ans
-        # ניסיון שני מחמיר
-        harder="חובה לציין מקור ממוספר (חוק/פס״ד) אחרי כל משפט."
-        ans2=ensure_hebrew(await generate_answer(q+"\n"+harder))
+        ans = ensure_hebrew(await generate_answer(q))
+        if await citations_ok(ans):
+            return ans
+        harder = "חובה לציין מקור ממוספר (חוק/פס״ד) אחרי כל משפט."
+        ans2 = ensure_hebrew(await generate_answer(q + "\n" + harder))
         return ans2
 
-    with st.form("ask",clear_on_submit=True):
-        q=st.text_area("הקלד שאלה משפטית:",height=100)
-        if st.form_submit_button("שלח") and q.strip():
-            ans=asyncio.run(handle(q.strip()))
-            add_msg("user",q.strip()); add_msg("assistant",ans)
-            conversation_coll.update_one({"local_storage_id":st.session_state.cid},
-                                         {"$set":{"messages":st.session_state["messages"],
-                                                  "user_name":st.session_state["name"]}},upsert=True)
-            st.rerun()
+    # ---------- ask form ----------
+    with st.form("ask", clear_on_submit=True):
+        q = st.text_area("הקלד שאלה משפטית:", height=100)
+        send = st.form_submit_button("שלח")
 
+    if send and q.strip():
+        ans = asyncio.run(handle(q.strip()))
+        add_msg("user", q.strip())
+        add_msg("assistant", ans)
+        conversation_coll.update_one(
+            {"local_storage_id": st.session_state.cid},
+            {"$set": {"messages": st.session_state["messages"],
+                      "user_name": st.session_state["name"]}},
+            upsert=True,
+        )
+        st.rerun()
+
+    # ---------- clear chat ----------
     if st.button("🗑 נקה"):
-        conversation_coll.delete_one({"local_storage_id":st.session_state.cid})
-        st_js("localStorage.clear()"); st.session_state.clear(); st.rerun()
+        conversation_coll.delete_one({"local_storage_id": st.session_state.cid})
+        st_js("localStorage.clear()")
+        st.session_state.clear()
+        st.rerun()
+
 
 # ─────────────── LEGAL FINDER ───────────────
 def legal_finder():
