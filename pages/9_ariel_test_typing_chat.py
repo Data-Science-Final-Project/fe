@@ -106,52 +106,29 @@ def ensure_he(t):
     return r.choices[0].message.content.strip()
 
 # ───────────── classification ─────────────
-CATEGORIES = {
-    "מכתב_פיטורין": {
-        "regex": [
-            r"פיטור(?:ין|ים)",
-            r"הפסק[ת]?[\s\-]+עבוד[תךוה]",
-            r"הודעת?\s+פיטור(?:ין|ים|י)",
-            r"סיום\s+ה?עסקת(?:ך|ו|ה)",
-            r"termination\s+(?:of\s+)?employment"
-        ]
-    },
-    "חוזה_עבודה": {
-        "regex": [
-            r"הסכם\s+עבודה",
-            r"employment\s+agreement"
-        ]
-    },
-    "תקנון": {
-        "regex": [
-            r"תקנון",
-            r"by.?law",
-            r"policy"
-        ]
-    },
-    "כתב_תביעה": {
-        "regex": [
-            r"כתב\s+תביעה",
-            r"\bהתובע\b",
-            r"\bהנתבע\b"
-        ]
-    },
-    "פסק_דין": {
-        "regex": [
-            r"פסק[-\s]?דין",
-            r"בית\s+משפט"
-        ]
-    },
-    "מכתב_אחר": {"regex": []}
+DOC_LABELS = {
+    "חוזה_עבודה":      "הסכם בין מעסיק לעובד או מועמד לעבודה",
+    "חוזה_שכירות":     "הסכם להשכרת דירה, משרד או נכס אחר",
+    "חוזה_שירות":      "הסכם בין מזמין לספק שירות",
+    "מכתב_פיטורין":    "הודעה על סיום העסקה או הפסקת עבודה",
+    "מכתב_התראה":      "מכתב דרישה או אזהרה לפני נקיטת הליכים",
+    "תקנון":           "מסמך כללי חובות וזכויות (לדוגמה: תקנון חברה, אתר, עמותה)",
+    "NDA":             "הסכם סודיות ואי-גילוי",
+    "כתב_תביעה":       "מסמך פתיחת הליך בבית-משפט",
+    "כתב_הגנה":        "תגובה לכתב תביעה",
+    "פסק_דין":         "הכרעת בית-משפט",
+    "מסמך_אחר":        "כל מסמך משפטי אחר שאינו נכנס לאף קטגוריה"
 }
 
-CLS_SYS = "אתה מסווג מסמכים משפטיים. החזר תווית אחת בלבד: " + ", ".join(CATEGORIES.keys())
+CLS_SYS = (
+    "אתה מסווג מסמכים משפטיים בעברית. "
+    "קרא את הטקסט המצורף והחזר *רק* את שם התווית המתאימה מבין:\n"
+    + ", ".join(DOC_LABELS.keys()) +
+    "\nאין לכתוב שום טקסט נוסף."
+)
 
 def classify_doc(txt: str) -> str:
-    for label, cfg in CATEGORIES.items():
-        if any(re.search(pat, txt, re.IGNORECASE) for pat in cfg["regex"]):
-            return label
-    sample = txt[:1500]
+    sample = txt[:1500]   # קטע מייצג, מקטין עלות
     try:
         resp = client_sync_openai.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -160,12 +137,13 @@ def classify_doc(txt: str) -> str:
                 {"role": "user",   "content": sample}
             ],
             temperature=0,
-            max_tokens=10
+            max_tokens=5
         )
         label = resp.choices[0].message.content.strip()
-        return label if label in CATEGORIES else "מכתב_אחר"
+        return label if label in DOC_LABELS else "מסמך_אחר"
     except Exception:
-        return "מכתב_אחר"
+        return "מסמך_אחר"
+
 
 
 # ────────────── prompts ──────────────
