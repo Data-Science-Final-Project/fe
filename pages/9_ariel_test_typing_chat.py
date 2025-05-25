@@ -186,7 +186,7 @@ async def citations_ok(ans:str)->bool:
 def chat_assistant():
     st.markdown('<div class="chat-header">💬 Ask Mini Lawyer</div>', unsafe_allow_html=True)
 
-    # --- bootstrap session ---
+    # ---------- bootstrap session ----------
     if "cid" not in st.session_state:
         cid = ls_get("AMLChatId") or str(uuid.uuid4())
         ls_set("AMLChatId", cid)
@@ -196,23 +196,30 @@ def chat_assistant():
         conv = conversation_coll.find_one({"local_storage_id": st.session_state.cid})
         st.session_state["messages"] = conv.get("messages", []) if conv else []
 
-    # ---------- name form ----------
-    if not st.session_state.get("name", ""):
+    # ---------- restore user name from localStorage (if exists) ----------
+    if "user_name" not in st.session_state:
+        stored_name = ls_get("AMLUserName")
+        if stored_name:
+            st.session_state["user_name"] = stored_name
+
+    # ---------- name form (only once) ----------
+    if "user_name" not in st.session_state:
         with st.form("name_form"):
-            st.text_input("הכנס שם להתחלת שיחה:", key="name")  
+            st.text_input("הכנס שם להתחלת שיחה:", key="user_name_input")
             submitted = st.form_submit_button("התחל")
 
-        if submitted and st.session_state["name"]:
-            n = st.session_state["name"]
-            add_msg("assistant", f"שלום {n}, איך אפשר לעזור?")
+        if submitted and st.session_state.get("user_name_input"):
+            st.session_state["user_name"] = st.session_state["user_name_input"]      # ← כתיבה פעם אחת
+            ls_set("AMLUserName", st.session_state["user_name"])                     # לשמירה בין ריצות
+            add_msg("assistant", f"שלום {st.session_state['user_name']}, איך אפשר לעזור?")
             conversation_coll.update_one(
                 {"local_storage_id": st.session_state.cid},
-                {"$set": {"user_name": n,
+                {"$set": {"user_name": st.session_state["user_name"],
                           "messages": st.session_state["messages"]}},
                 upsert=True
             )
             st.rerun()
-        return   
+        return   # מחכים לשם
 
     # ---------- chat history ----------
     st.markdown('<div class="chat-container">', unsafe_allow_html=True)
@@ -287,7 +294,7 @@ def chat_assistant():
         conversation_coll.update_one(
             {"local_storage_id": st.session_state.cid},
             {"$set": {"messages": st.session_state["messages"],
-                      "user_name": st.session_state["name"]}},
+                      "user_name": st.session_state["user_name"]}},
             upsert=True,
         )
         st.rerun()
@@ -300,23 +307,130 @@ def chat_assistant():
         st.rerun()
 
 
+
 # ─────────────── LEGAL FINDER ───────────────
-def legal_finder():
-    st.title("Legal Finder")
-    kind=st.selectbox("Search for",["Judgment","Law"])
-    scen=st.text_area("Scenario")
-    if st.button("Find") and scen:
-        emb=embed(scen)
-        idx=judgment_index if kind=="Judgment" else law_index
-        key="CaseNumber" if kind=="Judgment" else "IsraelLawID"
-        res=idx.query(vector=emb.tolist(),top_k=5,include_metadata=True)
-        for m in res.get("matches",[]):
-            _id=m.get("metadata",{}).get(key)
-            coll=judgment_collection if kind=="Judgment" else law_collection
-            doc=coll.find_one({key:_id})
-            if doc:
-                st.markdown(f"""<div class='law-card'><div class='law-title'>{doc.get('Name','')} (ID:{_id})</div>
-                                <div class='law-description'>{doc.get('Description','')[:600]}...</div></div>""",unsafe_allow_html=True)
+def load_document_details(kind, doc_id):
+    coll = judgment_collection if kind=="Judgment" else law_collection
+    key  = "CaseNumber" if kind=="Judgment" else "IsraelLawID"
+    return coll.find_one({key:doc_id})
+
+
+def get_explanation(scenario, doc, kind):
+    name = doc.get("Name", "")
+    desc = doc.get("Description", "")
+
+    if kind == "Judgment":
+        prompt = f"""בהתבסס על הסצנריו הבא:
+{scenario}
+
+וכן על פרטי פסק הדין הבא:
+שם: {name}
+תיאור: {desc}
+
+אנא הסבר בצורה תמציתית ומקצועית מדוע פסק דין זה יכול לעזור למקרה זה,
+והערך אותו בסולם 0-10 (0 = לא עוזר כלל, 10 = מתאים במדויק).
+**אל תיתן לרוב המסמכים ציון 9 – היה מגוון!**
+החזר JSON בלבד, לדוגמה:
+{{
+  "advice": "הסבר מקצועי בעברית",
+  "score": 8
+}}
+אין להוסיף טקסט נוסף.
+"""
+    else:  # kind == "Law"
+        prompt = f"""בהתבסס על הסצנריו הבא:
+{scenario}
+
+וכן על פרטי החוק הבא:
+שם: {name}
+תיאור: {desc}
+
+אנא הסבר בצורה תמציתית ומקצועית מדוע חוק זה יכול לעזור למקרה זה,
+והערך אותו בסולם 0-10 (0 = לא קשור, 10 = מתאים כמו כפפה).
+**אל תיתן לרוב החוקים ציון 9 – היה מגוון!**
+החזר JSON בלבד, לדוגמה:
+{{
+  "advice": "הסבר תמציתי ומקצועי בעברית",
+  "score": 7
+}}
+אין להוסיף טקסט נוסף.
+"""
+
+    try:
+        response = client_sync_openai.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+        )
+        return json.loads(response.choices[0].message.content.strip())
+    except Exception as e:
+        st.error(f"Error from GPT: {e}")
+        return {"advice": "לא ניתן לקבל הסבר בשלב זה.", "score": "N/A"}
+
+
+
+def legal_finder_assistant():
+    st.title("Legal Finder Assistant")
+
+    kind = st.selectbox("Choose what to search", ["Judgment", "Law"])
+    scen = st.text_area("Describe your scenario")
+
+    if st.button("Find Suitable Results") and scen:
+        # ---------- Pinecone similarity search ---------------------------------------
+        q_emb  = model.encode([scen], normalize_embeddings=True)[0]
+        index  = judgment_index if kind == "Judgment" else law_index
+        id_key = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
+
+        res     = index.query(vector=q_emb.tolist(), top_k=5, include_metadata=True)
+        matches = res.get("matches", [])
+        if not matches:
+            st.info("No matches found.")
+            return
+
+        # ---------- loop over matches ----------------------------------------
+        for m in matches:
+            doc_id = m.get("metadata", {}).get(id_key)
+            if not doc_id:
+                continue
+            doc = load_document_details(kind, doc_id)
+            if not doc:
+                continue
+
+            name     = doc.get("Name", "No Name")
+            desc     = doc.get("Description", "N/A")
+            date_lbl = "DecisionDate" if kind == "Judgment" else "PublicationDate"
+
+            extra_html = (
+                f"<div class='law-meta'>Procedure Type: {doc.get('ProcedureType','N/A')}</div>"
+                if kind == "Judgment" else ""
+            )
+
+            st.markdown(
+                f"<div class='law-card'>"
+                f"<div class='law-title'>{name} (ID: {doc_id})</div>"
+                f"<div class='law-description'>{desc}</div>"
+                f"<div class='law-meta'>{date_lbl}: {doc.get(date_lbl, 'N/A')}</div>"
+                f"{extra_html}"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+            # ---------- GPT Advise (Hidden Score) -----------------------------
+            with st.spinner("Getting explanation..."):
+                result = get_explanation(scen, doc, kind)
+
+            advice = result.get("advice", "")
+            # score  = result.get("score", "N/A") 
+
+            st.markdown(
+                f"<span style='color:red;'>עצת האתר: {advice}</span>",
+                unsafe_allow_html=True
+            )
+
+            # ---------- full JSON toggle -------------------------------
+            with st.expander(f"View Full Details for {doc_id}"):
+                st.json(doc)
+
 
 # ─────────────────── MAIN ───────────────────
 if app_mode=="Chat Assistant":
