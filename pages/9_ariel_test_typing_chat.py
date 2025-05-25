@@ -53,8 +53,17 @@ st.markdown("""
 app_mode = st.sidebar.selectbox("Choose module", ["Chat Assistant", "Legal Finder"])
 
 # ─────────────────── helpers ────────────────────
-ls_get = lambda k: st_js_blocking(f"return localStorage.getItem('{k}');", key="ls_"+k)
-ls_set = lambda k,v: st_js(f"localStorage.setItem('{k}', '{v}');")
+def ls_get(key: str):
+    
+    return st_js_blocking(
+        f"return localStorage.getItem('{key}');",
+        key="ls_" + key,
+        style={"display": "none"}   # האלמנט מוסתר
+    )
+
+def ls_set(key: str, val: str):
+    
+    st_js(f"localStorage.setItem('{key}', '{val}');")
 
 heb = re.compile(r'[א-ת]')
 SALUT = r'\b(לכבוד|מר|מר\.?|גב\'?|גברת|ד"ר|ד"ר\.?)\b'
