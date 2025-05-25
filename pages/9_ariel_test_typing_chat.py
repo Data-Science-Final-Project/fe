@@ -337,7 +337,7 @@ def chat_assistant():
                 upsert=True
             )
             st.rerun()
-        return  # ממתין להגדרת שם
+        return  
 
     # ───── history ─────
     st.markdown('<div class="chat-container">', unsafe_allow_html=True)
@@ -410,17 +410,17 @@ def chat_assistant():
 
     # ───── clear chat ─────
     if st.button("🗑 נקה שיחה"):
-    
-    try:
-        conv_coll.delete_one({"local_storage_id": st.session_state.cid})
-    except Exception as e:
-        st.error(f"שגיאה בניקוי השיחה מבסיס הנתונים: {e}")
-    st_js_blocking("""
-        localStorage.removeItem('AMLUserName');
-        localStorage.removeItem('AMLChatId');
-    """)
-    st.session_state.clear()
-    st.rerun()
+        try:
+            conv_coll.delete_one({"local_storage_id": st.session_state.cid})
+        except Exception as e:
+            st.error(f"שגיאה בניקוי השיחה מבסיס הנתונים: {e}")
+        st_js_blocking("""
+            localStorage.removeItem('AMLUserName');
+            localStorage.removeItem('AMLChatId');
+        """)
+        st.session_state.clear()
+        st.rerun()
+
 
 # ───────────── legal finder assistant ─────────────
 def load_document_details(kind, doc_id):
