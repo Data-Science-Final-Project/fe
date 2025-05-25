@@ -103,7 +103,7 @@ def chunk_text(txt, max_len=450):
     return chunks[:20]
 
 # ------------------------------------------------------------
-# NEW – robust document classifier
+# Robust document classifier
 # ------------------------------------------------------------
 CLS_PROMPT = """
 אתה מסווג מסמכים משפטיים. החזר *מילה אחת בלבד* מתוך הרשימה:
