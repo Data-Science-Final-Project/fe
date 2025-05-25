@@ -202,16 +202,23 @@ def chat_assistant():
     st.session_state.setdefault("name",None)
 
     # name
-    if not st.session_state["name"]:
-        with st.form("name"):
-            n=st.text_input("שם:")
-            if st.form_submit_button("התחל") and n:
-                st.session_state["name"]=n
-                add_msg("assistant","שלום "+n+"! איך אפשר לעזור?")
-                conversation_coll.update_one({"local_storage_id":st.session_state.cid},
-                    {"$set":{"user_name":n,"messages":st.session_state.messages}},upsert=True)
-                st.experimental_rerun()
-        return
+    if not st.session_state.get("name"):
+        with st.form("name_form"):
+            n = st.text_input("הכנס שם להתחלת שיחה:", key="user_name_field")
+            submitted = st.form_submit_button("התחל")   # רק איסוף הקלט
+        
+        if submitted and n:
+            st.session_state["name"] = n
+            add_msg("assistant", f"שלום {n}, איך אפשר לעזור?")
+            conversation_coll.update_one(
+                {"local_storage_id": st.session_state.cid},
+                {"$set": {"user_name": n,
+                          "messages": st.session_state["messages"]}},
+                upsert=True,
+            )
+            st.experimental_rerun()
+        return      
+
 
     # chat window
     st.markdown('<div class="chat-container">',unsafe_allow_html=True); show_msgs(); st.markdown("</div>",unsafe_allow_html=True)
