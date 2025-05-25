@@ -272,20 +272,22 @@ async def gen(q: str) -> str:
 def chat_assistant():
     st.markdown('<div class="chat-header">💬 Ask Mini Lawyer</div>', unsafe_allow_html=True)
 
-    # cid & messages
+    # ───── cid & messages ─────
     if "cid" not in st.session_state:
         cid = ls_get("AMLChatId") or str(uuid.uuid4())
         ls_set("AMLChatId", cid)
         st.session_state.cid = cid
+
     if "messages" not in st.session_state:
         conv = conv_coll.find_one({"local_storage_id": st.session_state.cid})
         st.session_state["messages"] = conv.get("messages", []) if conv else []
 
-    # name
+    # ───── user name ─────
     if "user_name" not in st.session_state:
         stored = ls_get("AMLUserName")
         if stored:
             st.session_state["user_name"] = stored
+
     if "user_name" not in st.session_state:
         with st.form("name"):
             st.text_input("הכנס שם להתחלת שיחה:", key="user_name_input")
@@ -303,14 +305,14 @@ def chat_assistant():
                 upsert=True
             )
             st.rerun()
-        return
+        return  # ממתין להגדרת שם
 
-    # history
+    # ───── history ─────
     st.markdown('<div class="chat-container">', unsafe_allow_html=True)
     show_msgs()
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # upload
+    # ───── upload ─────
     up = st.file_uploader("📄 העלה מסמך", type=["pdf", "docx"])
     if up:
         raw = read_pdf(up) if up.type == "application/pdf" else read_docx(up)
@@ -318,7 +320,7 @@ def chat_assistant():
         st.session_state.doc = "\n".join(l for l in raw.splitlines() if heb.search(l))
         st.success(f"סוג המסמך: {st.session_state.doctype}")
 
-    # summary
+    # ───── summary ─────
     if hasattr(st.session_state, "doc") and st.button("📋 סיכום"):
         with st.spinner("סיכום..."):
             prompt = (
@@ -337,6 +339,7 @@ def chat_assistant():
             st.session_state.summary = ensure_he(
                 r.choices[0].message.content.strip().replace("•", "–")
             )
+
     if st.session_state.get("summary"):
         st.markdown("### סיכום:")
         st.markdown(
@@ -344,7 +347,7 @@ def chat_assistant():
             unsafe_allow_html=True
         )
 
-    # answer helpers
+    # ───── answer helpers ─────
     async def handle(q):
         ans = ensure_he(await gen(q))
         if await citations_ok(ans):
@@ -354,6 +357,7 @@ def chat_assistant():
         )
         return ans2
 
+    # ───── ask form ─────
     with st.form("ask", clear_on_submit=True):
         q = st.text_area("הקלד שאלה משפטית:", height=100)
         send = st.form_submit_button("שלח")
@@ -372,9 +376,13 @@ def chat_assistant():
         )
         st.rerun()
 
+    # ───── clear chat ─────
     if st.button("🗑 נקה"):
         conv_coll.delete_one({"local_storage_id": st.session_state.cid})
-        st_js("localStorage.clear()")
+        st_js_blocking("""
+            localStorage.removeItem('AMLUserName');
+            localStorage.removeItem('AMLChatId');
+        """)
         st.session_state.clear()
         st.rerun()
 
