@@ -64,16 +64,16 @@ def ls_set(key: str, value: str) -> None:
     st_js(f"localStorage.setItem('{key}', '{value}');")
 
 # RTL text normalization
-heb_pattern = re.compile(r"[א-ת]")
+heb = re.compile(r"[א-ת]")  
 SALUT = re.compile(r"\b(לכבוד|מר|מר\.?|גב'?|גברת|ד\"ר|ד\"ר\.?)\b")
 
 def rtl_norm(text: str) -> str:
-    if not heb_pattern.search(text):
+    if not heb.search(text):
         return text
     try:
         text = get_display(text)
     except Exception:
-        text = " ".join(word[::-1] if heb_pattern.search(word) else word for word in text.split())
+        text = " ".join(word[::-1] if heb.search(word) else word for word in text.split())  
     text = SALUT.sub("", text)
     return re.sub(r"\s{2,}", " ", text).strip()
 
@@ -126,6 +126,7 @@ def ensure_he(text: str) -> str:
         max_tokens=len(text) // 2,
     )
     return response.choices[0].message.content.strip()
+
 
 
 
