@@ -12,66 +12,80 @@ load_dotenv()
 MONGO_URI = os.getenv('MONGO_URI')
 DATABASE_NAME = os.getenv('DATABASE_NAME')
 
+def toggle_expansion(key):
+    st.session_state[key] = not st.session_state.get(key, False)
+
+def is_expanded(key):
+    return st.session_state.get(key, False)
+
 # Custom CSS for Styling
 st.markdown("""
-    <style>
-        .law-card {
-            border: 1px solid #e0e0e0;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 15px;
-            box-shadow: 0px 2px 4px rgba(0,0,0,0.1);
-            background-color: #f9f9f9;
-        }
-        .law-title {
-            font-size: 20px;
-            font-weight: bold;
-            color: #333;
-        }
-        .law-description {
-            font-size: 16px;
-            color: #444;
-            margin: 10px 0;
-        }
-        .law-meta {
-            font-size: 14px;
-            color: #555;
-        }
-        .pagination-controls {
-            margin-top: 20px;
-            text-align: center;
-        }
-        .stButton>button {
-            background-color: #7ce38b;
-            color: white;
-            font-size: 14px;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        .stButton>button:hover {
-            background-color: #7ce38b;
-        }
-        .toggle-container {
-            display: flex;
-            justify-content: center;
-            margin-bottom: 30px;
-        }
-        .toggle-button {
-            background-color: #f0f0f0;
-            border: 2px solid #7ce38b;
-            padding: 10px 20px;
-            margin: 0 10px;
-            border-radius: 25px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        .toggle-button.active {
-            background-color: #7ce38b;
-            color: white;
-        }
-    </style>
+<style>
+    html, body, [class*="css"]  {
+        font-family: 'Segoe UI', sans-serif;
+        background-color: #1C1C2E;
+        color: #ECECEC;
+    }
+
+    .law-card {
+        background-color: #2A2A40;
+        border-left: 6px solid #9F7AEA;
+        border-radius: 10px;
+        padding: 20px 25px;
+        margin: 15px 0;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+
+    .law-title {
+        font-size: 22px;
+        font-weight: 600;
+        color: #ECECEC;
+        margin-bottom: 8px;
+    }
+
+    .law-description {
+        font-size: 16px;
+        color: #CCCCCC;
+        margin: 8px 0 12px 0;
+        line-height: 1.6;
+    }
+
+    .law-meta {
+        font-size: 14px;
+        color: #AAAAAA;
+    }
+
+    .stButton>button {
+        background-color: #9F7AEA !important;
+        color: white !important;
+        font-weight: 500;
+        padding: 8px 18px;
+        border: none;
+        border-radius: 5px;
+        transition: background-color 0.2s ease;
+    }
+
+    .stButton>button:hover {
+        background-color: #805AD5 !important;
+    }
+
+    .pagination-controls {
+        margin: 30px 0 0 0;
+        text-align: center;
+    }
+
+    .filters-section {
+        background-color: #2A2A40;
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 30px;
+        box-shadow: inset 0 0 3px rgba(255,255,255,0.05);
+    }
+
+    .toggle-button {
+        font-weight: 600;
+    }
+</style>
 """, unsafe_allow_html=True)
 
 # Initialize session state for search type
@@ -175,23 +189,36 @@ def main():
     search_type = option_menu(
         None,
         ["Laws", "Judgments"],
-        icons=["book", "gavel"],
+        icons=["book", "briefcase"],
         orientation="horizontal",
         styles={
-            "container": {"padding": "0!important", "background-color": "#fafafa"},
-            "icon": {"color": "#7ce38b", "font-size": "20px"},
+            "container": {
+                "padding": "0!important",
+                "background-color": "#2A2A40",
+                "border-radius": "10px",
+                "margin-bottom": "20px"
+            },
+            "icon": {
+                "color": "#FFFFFF",
+                "font-size": "20px"
+            },
             "nav-link": {
-                "font-size": "18px",
+                "font-size": "16px",
                 "text-align": "center",
                 "margin": "0px",
-                "--hover-color": "#eee",
+                "color": "#CCCCCC",
+                "padding": "10px 25px",
+                "border-radius": "10px",
+                "transition": "0.3s ease",
             },
             "nav-link-selected": {
-                "background-color": "#7ce38b",
+                "background-color": "#9F7AEA",
                 "color": "white",
                 "font-weight": "bold",
-            },
+                "border-radius": "10px",
+            }
         }
+
     )
     st.session_state.search_type = search_type
 
@@ -258,15 +285,46 @@ def main():
                             </div>
                         """, unsafe_allow_html=True)
 
-                        if st.button(f"View Full Details for {law['IsraelLawID']}", key=f"details_{law['IsraelLawID']}"):
-                            with st.spinner("Loading full details..."):
-                                full_law = load_full_law_details(
-                                    client, law['IsraelLawID'])
-                                if full_law:
-                                    st.json(full_law)
-                                else:
-                                    st.error(
-                                        f"Unable to load full details for law ID {law['IsraelLawID']}")
+                        law_id = law['IsraelLawID']
+                        button_key = f"law_button_{law_id}"
+                        state_key = f"law_expanded_{law_id}"
+
+                        if state_key not in st.session_state:
+                            st.session_state[state_key] = False
+
+                        st.button(
+                            "🔍 View Details" if not st.session_state.get(state_key, False) else "🙈 Hide Details",
+                            key=button_key,
+                            on_click=toggle_expansion,
+                            args=(state_key,)
+                        )
+
+                        if st.session_state[state_key]:
+                            full_law = load_full_law_details(client, law_id)
+                            if not full_law:
+                                st.error(f"Could not load full details for law ID {law_id}")
+                            else:
+                                segments_html = ''.join([
+                                f"""
+                                <div style='margin-top:12px;'>
+                                    <p><strong>📑 Section {s.get('SectionNumber', '')}</strong>: {s.get('SectionDescription', '')}</p>
+                                    <p style='color:#BBBBBB; margin-right:10px;'>{s.get('SectionContent', '')}</p>
+                                </div>
+                                """ for s in full_law.get("Segments", [])
+                            ])
+
+                            st.markdown(f"""
+                                <div style='padding:15px; background:#1C1C2E; border:1px solid #9F7AEA; border-radius:10px; margin-top:10px; direction:rtl; text-align:right;'>
+                                    <p><strong>📘 Law ID:</strong> {full_law.get("IsraelLawID")}</p>
+                                    <p><strong>📄 Name:</strong> {full_law.get("Name")}</p>
+                                    <p><strong>📌 Basic Law:</strong> {"✅" if full_law.get("IsBasicLaw", False) else "❌"}</p>
+                                    <hr style='border:1px solid #444;' />
+                                    {segments_html}
+                                </div>
+                            """, unsafe_allow_html=True)
+
+
+
 
     else:  # Judgments
         # Judgments filters
@@ -299,9 +357,17 @@ def main():
 
         # Query judgments
         with st.spinner("Loading Judgments..."):
-            judgments = query_judgments(
-                client, filters, (st.session_state["page"] - 1) * 10, 10)
-            total_items = count_judgments(client, filters)
+            if "judgments_data" not in st.session_state:
+                st.session_state["force_reload"] = True
+
+            if "judgments_data" not in st.session_state or st.session_state.get("force_reload", False):
+                st.session_state.judgments_data = query_judgments(
+            client, filters, (st.session_state["page"] - 1) * 10, 10)
+                st.session_state.judgments_total = count_judgments(client, filters)
+                st.session_state.force_reload = False
+
+            judgments = st.session_state.judgments_data
+            total_items = st.session_state.judgments_total
 
             if judgments:
                 st.markdown(
@@ -321,9 +387,44 @@ def main():
 
                         col1, col2 = st.columns([1, 1])
                         with col1:
-                            if st.button(f"View Full Details for {judgment['CaseNumber']}",
-                                         key=f"details_{judgment['CaseNumber']}"):
-                                st.json(judgment)
+                            case_number = judgment['CaseNumber']
+                            button_key = f"judgment_button_{case_number}"
+                            state_key = f"judgment_expanded_{case_number}"
+
+                            if state_key not in st.session_state:
+                                st.session_state[state_key] = False
+
+                            st.button(
+                            "🔍 View Details" if not st.session_state.get(state_key, False) else "🙈 Hide Details",
+                            key=button_key,
+                            on_click=toggle_expansion,
+                            args=(state_key,)
+                            )
+
+                            if st.session_state[state_key]:
+                                st.markdown(f"""
+                                    <div style='padding:15px; background:#1C1C2E; border:1px solid #9F7AEA; border-radius:10px; margin-top:10px; direction:rtl; text-align:right;'>
+                                        <p><strong>📄 שם:</strong> {judgment.get("Name", "N/A")}</p>
+                                        <p><strong>📁 מספר תיק:</strong> {judgment.get("CaseNumber", "N/A")}</p>
+                                        <p><strong>🏛️ סוג בית משפט:</strong> {judgment.get("CourtType", "N/A")}</p>
+                                        <p><strong>⚖️ סוג הליך:</strong> {judgment.get("ProcedureType", "N/A")}</p>
+                                        <p><strong>👩‍⚖️ שופט:</strong> {judgment.get("Judge", "N/A")}</p>
+                                        <p><strong>🌍 מחוז:</strong> {judgment.get("District", "N/A")}</p>
+                                        <p><strong>📅 תאריך החלטה:</strong> {judgment.get("DecisionDate", "N/A")}</p>
+                                    </div>
+                                """, unsafe_allow_html=True)
+
+                                documents = judgment.get('Documents', [])
+                                if documents and isinstance(documents, list) and 'url' in documents[0]:
+                                    document_url = documents[0]['url']
+                                    st.markdown(f"""
+                                        <a href="{document_url}" target="_blank">
+                                            <button style='background-color:#9F7AEA; color:white; padding:8px 16px; border:none; border-radius:5px; cursor:pointer; margin-top:10px;'>
+                                                📥 Download
+                                            </button>
+                                        </a>
+                                    """, unsafe_allow_html=True)
+
                         with col2:
                             documents = judgment.get('Documents', [])
                             if documents and isinstance(documents, list) and 'url' in documents[0]:
@@ -332,7 +433,6 @@ def main():
                                     f"""
                                     <a href="{document_url}" target="_blank" style="text-decoration:none;">
                                         <button style="
-                                            background-color:#7ce38b;
                                             color:white;
                                             border:none;
                                             padding:8px 16px;
