@@ -33,41 +33,71 @@ index = pinecone_client.Index(INDEX_NAME)
 # === Styling ===
 st.markdown("""
     <style>
-        .law-card {
-            border: 1px solid #e0e0e0;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 15px;
-            box-shadow: 0px 2px 4px rgba(0,0,0,0.1);
-            background-color: #f9f9f9;
-        }
-        .law-title {
-            font-size: 20px;
-            font-weight: bold;
-            color: #333;
-        }
-        .law-description {
-            font-size: 16px;
-            color: #444;
-            margin: 10px 0;
-        }
-        .law-meta {
-            font-size: 14px;
-            color: #555;
-        }
-        .stButton>button {
-            background-color: #7ce38b;
-            color: white;
-            font-size: 14px;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        .stButton>button:hover {
-            background-color: #7ce38b;
-        }
-    </style>
+    html, body, [class*="css"]  {
+        font-family: 'Segoe UI', sans-serif;
+        background-color: #1C1C2E;
+        color: #ECECEC;
+    }
+
+    .law-card {
+        background-color: #2A2A40;
+        border-left: 6px solid #9F7AEA;
+        border-radius: 10px;
+        padding: 20px 25px;
+        margin: 15px 0;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+
+    .law-title {
+        font-size: 22px;
+        font-weight: 600;
+        color: #ECECEC;
+        margin-bottom: 8px;
+    }
+
+    .law-description {
+        font-size: 16px;
+        color: #CCCCCC;
+        margin: 8px 0 12px 0;
+        line-height: 1.6;
+    }
+
+    .law-meta {
+        font-size: 14px;
+        color: #AAAAAA;
+    }
+
+    .stButton>button {
+        background-color: #9F7AEA !important;
+        color: white !important;
+        font-weight: 500;
+        padding: 8px 18px;
+        border: none;
+        border-radius: 5px;
+        transition: background-color 0.2s ease;
+    }
+
+    .stButton>button:hover {
+        background-color: #805AD5 !important;
+    }
+
+    .pagination-controls {
+        margin: 30px 0 0 0;
+        text-align: center;
+    }
+
+    .filters-section {
+        background-color: #2A2A40;
+        padding: 20px;
+        border-radius: 10px;
+        margin-bottom: 30px;
+        box-shadow: inset 0 0 3px rgba(255,255,255,0.05);
+    }
+
+    .toggle-button {
+        font-weight: 600;
+    }
+</style>
 """, unsafe_allow_html=True)
 
 # === Load full details for a single law ===

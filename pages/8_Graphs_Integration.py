@@ -37,17 +37,41 @@ col1, col2 = st.columns([1, 3])
 with col1:
     show_all = st.checkbox("Show All Related Types")
 with col2:
-    selected_types = st.multiselect("Include related:", ["Law", "Case", "Judgment"],
-                                    default=st.session_state.get(
-                                        "last_selected_types", ["Law", "Case"]),
-                                    disabled=show_all)
+    selected_types = []
 
-if show_all:
-    selected_types = ["Law", "Case", "Judgment"]
+    st.markdown("**Include related types:**")
+    for label in ["Law", "Case", "Judgment"]:
+        selected = (
+            True if show_all
+            else label in st.session_state.get("last_selected_types", ["Law", "Case"])
+        )
+        checked = st.checkbox(
+            f"{label}",
+            value=selected,
+            disabled=show_all,
+            key=f"type_{label}"
+        )
+        if checked:
+            selected_types.append(label)
 
-case_number = st.text_input(
-    "Enter Case Number (e.g., 69349-12-20)", value=st.session_state.last_case_number)
-search = st.button("Search")
+
+@st.cache_data
+def get_all_case_numbers():
+    return sorted([
+        node["properties"]["number"]
+        for node in nodes_dict.values()
+        if "Case" in node["labels"] and "number" in node["properties"]
+    ])
+
+case_numbers = get_all_case_numbers()
+
+case_number = st.selectbox(
+    "Enter Case Number",
+    options=case_numbers,
+    index=case_numbers.index(st.session_state.last_case_number)
+    if st.session_state.last_case_number in case_numbers else 0,
+    placeholder="Start typing a case number..."
+)
 
 
 def find_case_node_by_number(number):
@@ -149,20 +173,22 @@ def render_pyvis(center_node, related_nodes, edge_list):
 display_case_number = st.session_state.last_case_number
 display_selected_types = st.session_state.last_selected_types
 
-if search:
-    st.session_state.last_case_number = case_number
-    st.session_state.last_selected_types = selected_types
-    display_case_number = case_number
-    display_selected_types = selected_types
+# if search:
+#     st.session_state.last_case_number = case_number
+#     st.session_state.last_selected_types = selected_types
+#     display_case_number = case_number
+#     display_selected_types = selected_types
 
 # Always display graph if previous search exists
-if display_case_number:
-    node = find_case_node_by_number(display_case_number)
+if case_number and selected_types:
+    st.session_state.last_case_number = case_number
+    st.session_state.last_selected_types = selected_types
+
+    node = find_case_node_by_number(case_number)
     if not node:
         st.warning("⚠️ Case not found in the dataset.")
     else:
-        related_nodes, edges = get_connected_nodes_and_edges(
-            node, display_selected_types)
+        related_nodes, edges = get_connected_nodes_and_edges(node, selected_types)
         html_path = render_pyvis(node, related_nodes, edges)
         with open(html_path, "r", encoding="utf-8") as f:
             components.html(f.read(), height=700, scrolling=True)
