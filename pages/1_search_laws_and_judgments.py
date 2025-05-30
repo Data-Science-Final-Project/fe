@@ -50,6 +50,7 @@ st.markdown("""
         font-size: 14px;
         color: #AAAAAA;
     }
+            
 
     .stButton>button {
         background-color: #9F7AEA !important;
@@ -81,6 +82,7 @@ st.markdown("""
     .toggle-button {
         font-weight: 600;
     }
+
 </style>
 """, unsafe_allow_html=True)
 

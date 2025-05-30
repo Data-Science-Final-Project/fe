@@ -9,7 +9,7 @@ st.markdown("""
             text-align: center;
             font-size: 48px;
             font-weight: bold;
-            color: #4CAF50;
+            color: #9F7AEA;
         }
         .subtitle {
             text-align: center;
