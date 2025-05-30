@@ -295,8 +295,7 @@ if selected_dashboard == "Lawyers Statistics":
         <button style="padding:6px 10px; background-color: #4CAF50; color: white; border: none; border-radius: 8px;
          font-size: 14px; cursor: pointer;"
         onmouseover="this.style.backgroundColor='#45a049'"
-        onmouseout="this.style.backgroundColor='#4CAF50'">
-        מעבר לפסק הדין</button></a>'''
+        onmouseout="this.style.backgroundColor='#4CAF50'"><button></a/>מעבר לפסק הדין'''
 
         lawyer_df.loc[:, "מעבר לפסק הדין"] = lawyer_df["CaseURL"].apply(
             make_button)
