@@ -278,25 +278,34 @@ if selected_dashboard == "Lawyers Statistics":
         #     lambda x: pd.Series(split_case_name(x)))
         lawyer_df[["בית משפט", "שם תיק"]] = lawyer_df["CaseName"].apply(split_case_name)
 
+        # def make_button(url):
+        #     clean_url = str(url).strip().replace('\n', '')
+        #     return f"""
+        #     <a href=\"{clean_url}\" target=\"_blank\" style=\"text-decoration: none;\">
+        #         <button style=\"
+        #             padding:6px 10px;
+        #             background-color: #4CAF50;
+        #             color: white;
+        #             border: none;
+        #             border-radius: 8px;
+        #             font-size: 14px;
+        #             cursor: pointer;
+        #             transition: background-color 0.3s;
+        #         \"
+        #         onmouseover=\"this.style.backgroundColor='#45a049'\"
+        #         onmouseout=\"this.style.backgroundColor='#4CAF50'\"
+        #         >מעבר לפסק הדין</button>
+        #     </a>
+        #     """
         def make_button(url):
             clean_url = str(url).strip().replace('\n', '')
-            return f"""
-            <a href=\"{clean_url}\" target=\"_blank\" style=\"text-decoration: none;\">
-                <button style=\"
-                    padding:6px 10px;
-                    background-color: #4CAF50;
-                    color: white;
-                    border: none;
-                    border-radius: 8px;
-                    font-size: 14px;
-                    cursor: pointer;
-                    transition: background-color 0.3s;
-                \" 
-                onmouseover=\"this.style.backgroundColor='#45a049'\"
-                onmouseout=\"this.style.backgroundColor='#4CAF50'\"
-                >מעבר לפסק הדין</button>
-            </a>
-            """
+            return f'''<a href="{clean_url}" target="_blank" style="text-decoration: none;">
+        <button style="padding:6px 10px; background-color: #4CAF50; color: white; border: none; border-radius: 8px;
+         font-size: 14px; cursor: pointer;"
+        onmouseover="this.style.backgroundColor='#45a049'"
+        onmouseout="this.style.backgroundColor='#4CAF50'">
+        מעבר לפסק הדין</button></a>'''
+
         lawyer_df.loc[:, "מעבר לפסק הדין"] = lawyer_df["CaseURL"].apply(
             make_button)
         final_table = lawyer_df[["שם תיק", "בית משפט", "מעבר לפסק הדין"]]
