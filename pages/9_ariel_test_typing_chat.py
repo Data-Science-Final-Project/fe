@@ -39,19 +39,87 @@ conversation_coll     = db["conversations"]
 # ------------------------------------------------------------
 st.set_page_config(page_title="Ask Mini Lawyer Suite", page_icon="⚖️", layout="wide")
 COMMON_CSS = """
-<style>
-.chat-container{background:#1E1E1E;padding:20px;border-radius:10px}
-.chat-header{color:#4CAF50;font-size:36px;font-weight:bold;text-align:center}
-.user-message{background:#4CAF50;color:#ecf2f8;padding:10px;border-radius:10px;margin:10px}
-.bot-message{background:#44475a;color:#ecf2f8;padding:10px;border-radius:10px;margin:10px}
-.timestamp{font-size:0.75em;color:#bbb}
-.law-card{border:1px solid #e0e0e0;border-radius:10px;padding:20px;margin-bottom:15px;box-shadow:0 2px 4px rgba(0,0,0,0.1);background:#f9f9f9}
-.law-title{font-size:20px;font-weight:bold;color:#333}
-.law-description{font-size:16px;color:#444;margin:10px 0}
-.law-meta{font-size:14px;color:#555}
-.stButton>button{background:#7ce38b;color:#fff;font-size:14px;border:none;padding:8px 16px;border-radius:5px;cursor:pointer}
-.stButton>button:hover{background:#69d67a}
-</style>
+    <style>
+    /* Chat Container and Header */
+    .chat-container {
+        background: #1C1C2E;
+        padding: 20px;
+        border-radius: 10px;
+    }
+
+    .chat-header {
+        color: #9F7AEA;
+        font-size: 36px;
+        font-weight: bold;
+        text-align: center;
+    }
+
+    /* Messages */
+    .user-message {
+        background: #9F7AEA;
+        color: #ECECEC;
+        padding: 10px;
+        border-radius: 10px;
+        margin: 10px;
+    }
+
+    .bot-message {
+        background: #2A2A40;
+        color: #ECECEC;
+        padding: 10px;
+        border-radius: 10px;
+        margin: 10px;
+    }
+
+    /* Timestamp */
+    .timestamp {
+        font-size: 0.75em;
+        color: #AAAAAA;
+    }
+
+    /* Law Card */
+    .law-card {
+        border: 1px solid #3B3B52;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 15px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        background: #2A2A40;
+    }
+
+    .law-title {
+        font-size: 20px;
+        font-weight: bold;
+        color: #ECECEC;
+    }
+
+    .law-description {
+        font-size: 16px;
+        color: #CCCCCC;
+        margin: 10px 0;
+    }
+
+    .law-meta {
+        font-size: 14px;
+        color: #AAAAAA;
+    }
+
+    /* Buttons */
+    .stButton > button {
+        background: #9F7AEA !important;
+        color: #FFFFFF !important;
+        font-size: 14px;
+        border: none;
+        padding: 8px 16px;
+        border-radius: 5px;
+        cursor: pointer;
+    }
+
+    .stButton > button:hover {
+        background: #805AD5 !important;
+    }
+    </style>
+
 """
 st.markdown(COMMON_CSS, unsafe_allow_html=True)
 

@@ -31,20 +31,32 @@ selected_dashboard = option_menu(
     icons=["bar-chart", "person-badge"],
     orientation="horizontal",
     styles={
-        "container": {"padding": "0!important", "background-color": "#fafafa"},
-        "icon": {"color": "#7ce38b", "font-size": "20px"},
-        "nav-link": {
-            "font-size": "18px",
-            "text-align": "center",
-            "margin": "0px",
-            "--hover-color": "#eee",
-        },
-        "nav-link-selected": {
-            "background-color": "#7ce38b",
-            "color": "white",
-            "font-weight": "bold",
-        },
-    }
+            "container": {
+                "padding": "0!important",
+                "background-color": "#2A2A40",
+                "border-radius": "10px",
+                "margin-bottom": "20px"
+            },
+            "icon": {
+                "color": "#FFFFFF",
+                "font-size": "20px"
+            },
+            "nav-link": {
+                "font-size": "16px",
+                "text-align": "center",
+                "margin": "0px",
+                "color": "#CCCCCC",
+                "padding": "10px 25px",
+                "border-radius": "10px",
+                "transition": "0.3s ease",
+            },
+            "nav-link-selected": {
+                "background-color": "#9F7AEA",
+                "color": "white",
+                "font-weight": "bold",
+                "border-radius": "10px",
+            }
+        }
 )
 
 # --- STATISTICS DASHBOARD ---
