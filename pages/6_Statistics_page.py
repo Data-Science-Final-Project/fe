@@ -258,14 +258,6 @@ if selected_dashboard == "Lawyers Statistics":
     st.markdown("---")
     st.subheader("📄 רשימת תיקים של עורך הדין")
     if "CaseName" in lawyer_df.columns and "CaseURL" in lawyer_df.columns:
-        # def split_case_name(full_name):
-        #     parts = full_name.split(",", 1)
-        #     if len(parts) == 2:
-        #         court = parts[0].strip()
-        #         case_name = parts[1].strip()
-        #         return court, case_name
-        #     else:
-        #         return "", full_name
         def split_case_name(full_name):
             if not isinstance(full_name, str):
                 return pd.Series([None, None])
