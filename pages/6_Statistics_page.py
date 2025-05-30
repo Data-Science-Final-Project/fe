@@ -258,16 +258,25 @@ if selected_dashboard == "Lawyers Statistics":
     st.markdown("---")
     st.subheader("📄 רשימת תיקים של עורך הדין")
     if "CaseName" in lawyer_df.columns and "CaseURL" in lawyer_df.columns:
+        # def split_case_name(full_name):
+        #     parts = full_name.split(",", 1)
+        #     if len(parts) == 2:
+        #         court = parts[0].strip()
+        #         case_name = parts[1].strip()
+        #         return court, case_name
+        #     else:
+        #         return "", full_name
         def split_case_name(full_name):
+            if not isinstance(full_name, str):
+                return pd.Series([None, None])
             parts = full_name.split(",", 1)
             if len(parts) == 2:
-                court = parts[0].strip()
-                case_name = parts[1].strip()
-                return court, case_name
-            else:
-                return "", full_name
-        lawyer_df.loc[:, ["בית משפט", "שם תיק"]] = lawyer_df["CaseName"].apply(
-            lambda x: pd.Series(split_case_name(x)))
+                return pd.Series([parts[0].strip(), parts[1].strip()])
+            return pd.Series([None, full_name.strip()])
+
+        # lawyer_df.loc[:, ["בית משפט", "שם תיק"]] = lawyer_df["CaseName"].apply(
+        #     lambda x: pd.Series(split_case_name(x)))
+        lawyer_df[["בית משפט", "שם תיק"]] = lawyer_df["CaseName"].apply(split_case_name)
 
         def make_button(url):
             clean_url = str(url).strip().replace('\n', '')
