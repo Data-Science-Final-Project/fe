@@ -291,11 +291,12 @@ if selected_dashboard == "Lawyers Statistics":
         #     """
         def make_button(url):
             clean_url = str(url).strip().replace('\n', '')
-            return f'''<a href="{clean_url}" target="_blank" style="text-decoration: none;">
-        <button style="padding:6px 10px; background-color: #4CAF50; color: white; border: none; border-radius: 8px;
-         font-size: 14px; cursor: pointer;"
-        onmouseover="this.style.backgroundColor='#45a049'"
-        onmouseout="this.style.backgroundColor='#4CAF50'"><button></a/>מעבר לפסק הדין'''
+        #     return f'''<a href="{clean_url}" target="_blank" style="text-decoration: none;">
+        # <button style="padding:6px 10px; background-color: #4CAF50; color: white; border: none; border-radius: 8px;
+        #  font-size: 14px; cursor: pointer;"
+        # onmouseover="this.style.backgroundColor='#45a049'"
+        # onmouseout="this.style.backgroundColor='#4CAF50'"><button></a/>מעבר לפסק הדין'''
+            return f'<a href="{clean_url}" target="_blank"><button style="padding:6px 10px; background-color:#4CAF50; color:white; border:none; border-radius:8px; font-size:14px; cursor:pointer;">מעבר לפסק הדין</button></a>'
 
         lawyer_df.loc[:, "מעבר לפסק הדין"] = lawyer_df["CaseURL"].apply(
             make_button)
