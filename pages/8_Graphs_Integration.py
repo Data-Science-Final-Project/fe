@@ -5,7 +5,6 @@ import tempfile
 import streamlit.components.v1 as components
 import os
 
-
 @st.cache_data
 def load_graph_json(path):
     nodes, relationships = {}, []
@@ -192,3 +191,12 @@ if case_number and selected_types:
         html_path = render_pyvis(node, related_nodes, edges)
         with open(html_path, "r", encoding="utf-8") as f:
             components.html(f.read(), height=700, scrolling=True)
+        with st.expander("📤 Export Graph"):
+            st.markdown("""
+                **To export the graph:**
+
+                1. Right-click on the graph.
+                2. Choose **'Save image as...'** or use your browser's screenshot tool.
+            """)
+
+
