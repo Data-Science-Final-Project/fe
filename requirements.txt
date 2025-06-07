@@ -92,4 +92,5 @@ PyMuPDF==1.23.9
 python-docx
 pyvis
 python-bidi==0.4.2
-streamlit-js-eval==0.1.7 
+streamlit-js-eval==0.1.7
+streamlit-lottie==0.0.5 
