@@ -22,7 +22,7 @@ OPENAI_API_KEY = os.getenv("OPEN_AI")
 client_async_openai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 client_sync_openai  = OpenAI(api_key=OPENAI_API_KEY)
 
-torch.classes.__path__ = []           # fixes torch / streamlit clash
+torch.classes.__path__ = []           
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # ------------------------------------------------------------
@@ -125,7 +125,8 @@ COMMON_CSS = """
 """
 st.markdown(COMMON_CSS, unsafe_allow_html=True)
 
-app_mode = st.sidebar.selectbox("Choose module", ["Chat Assistant", "Legal Finder Assistant"])
+app_mode = "Chat Assistant"
+
 
 # ------------------------------------------------------------
 # Utility
@@ -451,123 +452,7 @@ def chat_assistant():
         st.session_state.clear()
         st.rerun()
 
-# ------------------------------------
-# Legal Finder Assistant
-# ------------------------------------
-def load_document_details(kind, doc_id):
-    coll = judgment_collection if kind == "Judgment" else law_collection
-    key  = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
-    return coll.find_one({key: doc_id})
-
-def get_explanation(scenario, doc, kind):
-    name = doc.get("Name", "")
-    desc = doc.get("Description", "")
-
-    if kind == "Judgment":
-        prompt = f"""בהתבסס על הסצנריו הבא:
-{scenario}
-
-וכן על פרטי פסק הדין הבא:
-שם: {name}
-תיאור: {desc}
-
-אנא הסבר בצורה תמציתית ומקצועית מדוע פסק דין זה יכול לעזור למקרה זה,
-והערך אותו בסולם 0-10 (0 = לא עוזר כלל, 10 = מתאים במדויק).
-**אל תיתן לרוב המסמכים ציון 9 – היה מגוון!**
-החזר JSON בלבד, לדוגמה:
-{{
-  "advice": "הסבר מקצועי בעברית",
-  "score": 8
-}}"""
-    else:  # Law
-        prompt = f"""בהתבסס על הסצנריו הבא:
-{scenario}
-
-וכן על פרטי החוק הבא:
-שם: {name}
-תיאור: {desc}
-
-אנא הסבר בצורה תמציתית ומקצועית מדוע חוק זה יכול לעזור למקרה זה,
-והערך אותו בסולם 0-10 (0 = לא קשור, 10 = מתאים כמו כפפה).
-**אל תיתן לרוב החוקים ציון 9 – היה מגוון!**
-החזר JSON בלבד, לדוגמה:
-{{
-  "advice": "הסבר תמציתי ומקצועי בעברית",
-  "score": 7
-}}"""
-
-    try:
-        response = client_sync_openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-        )
-        return json.loads(response.choices[0].message.content.strip())
-    except Exception as e:
-        st.error(f"Error from GPT: {e}")
-        return {"advice": "לא ניתן לקבל הסבר בשלב זה.", "score": "N/A"}
-
-def legal_finder_assistant():
-    st.title("Legal Finder Assistant")
-
-    kind = st.selectbox("Choose what to search", ["Judgment", "Law"])
-    scen = st.text_area("Describe your scenario")
-
-    if st.button("Find Suitable Results") and scen:
-        # ---------- Pinecone similarity search ----------
-        q_emb  = model.encode([scen], normalize_embeddings=True)[0]
-        index  = judgment_index if kind == "Judgment" else law_index
-        id_key = "CaseNumber" if kind == "Judgment" else "IsraelLawID"
-
-        res     = index.query(vector=q_emb.tolist(), top_k=5, include_metadata=True)
-        matches = res.get("matches", [])
-        if not matches:
-            st.info("No matches found.")
-            return
-
-        # ---------- loop over matches ----------
-        for m in matches:
-            doc_id = m.get("metadata", {}).get(id_key)
-            if not doc_id:
-                continue
-            doc = load_document_details(kind, doc_id)
-            if not doc:
-                continue
-
-            name     = doc.get("Name", "No Name")
-            desc     = doc.get("Description", "N/A")
-            date_lbl = "DecisionDate" if kind == "Judgment" else "PublicationDate"
-
-            extra_html = (
-                f"<div class='law-meta'>Procedure Type: {doc.get('ProcedureType','N/A')}</div>"
-                if kind == "Judgment" else ""
-            )
-
-            st.markdown(
-                f"<div class='law-card'>"
-                f"<div class='law-title'>{name} (ID: {doc_id})</div>"
-                f"<div class='law-description'>{desc}</div>"
-                f"<div class='law-meta'>{date_lbl}: {doc.get(date_lbl, 'N/A')}</div>"
-                f"{extra_html}"
-                f"</div>",
-                unsafe_allow_html=True
-            )
-
-            # ---------- GPT Advice -----------------------
-            with st.spinner("Getting explanation..."):
-                result = get_explanation(scen, doc, kind)
-
-            advice = result.get("advice", "")
-            st.markdown(f"<span style='color:red;'>עצת המערכת: {advice}</span>", unsafe_allow_html=True)
-
-            # ---------- full JSON toggle -----------------
-            with st.expander(f"View Full Details for {doc_id}"):
-                st.json(doc)
-
 # ------------------------------------------------------------
 # MAIN
 # ------------------------------------------------------------
-if app_mode == "Chat Assistant":
-    chat_assistant()
-else:
-    legal_finder_assistant()
+chat_assistant()
